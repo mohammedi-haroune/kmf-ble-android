@@ -8,10 +8,18 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
+interface DeviceSnapshotStore {
+    val snapshot: Flow<DeviceSnapshot?>
+
+    suspend fun save(snapshot: DeviceSnapshot)
+
+    suspend fun clear()
+}
+
 class DeviceStore(
     private val dataStore: DataStore<Preferences>,
-) {
-    val snapshot: Flow<DeviceSnapshot?> = dataStore.data.map { preferences ->
+) : DeviceSnapshotStore {
+    override val snapshot: Flow<DeviceSnapshot?> = dataStore.data.map { preferences ->
         val address = preferences[ADDRESS] ?: return@map null
         DeviceSnapshot(
             address = address,
@@ -22,7 +30,7 @@ class DeviceStore(
         )
     }
 
-    suspend fun save(snapshot: DeviceSnapshot) {
+    override suspend fun save(snapshot: DeviceSnapshot) {
         dataStore.edit { preferences ->
             preferences[ADDRESS] = snapshot.address
             preferences.setOrRemove(NAME, snapshot.name)
@@ -32,7 +40,7 @@ class DeviceStore(
         }
     }
 
-    suspend fun clear() {
+    override suspend fun clear() {
         dataStore.edit { preferences ->
             preferences.remove(ADDRESS)
             preferences.remove(NAME)

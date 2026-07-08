@@ -13,8 +13,10 @@
 - Task 3 is complete: GATT profile discovery, selection, and persistence models.
 - Task 4 local implementation is complete: BLE scanner, session, serialized GATT queue, repository, and JVM BLE tests.
 - Task 4 physical BLE smoke test is pending because no Android device or KMF meter is attached in this environment.
-- Continue with Task 5 next: ViewModel, reducer, and Compose utility screen.
-- Tasks 5-6 are not implemented yet.
+- Task 5 local implementation is complete: ViewModel, reducer, Compose utility screen, and JVM UI tests.
+- Task 5 manual UI smoke test is pending because no Android device or KMF meter is attached in this environment.
+- Continue with Task 6 next: final device validation notes and README.
+- Task 6 is not implemented yet.
 
 **Architecture:** The app is a single-activity native Android app. It has four boundaries: Android permission/Bluetooth readiness, BLE transport with a serialized GATT operation queue, KMF protocol parsing based on `kmf.yml`, and ViewModel/Compose UI state. `kmf.yml` is the behavior reference for how to receive and parse KMF BLE data: notify on the data characteristic, buffer text until CR/LF, parse `A=` and `C=` lines, discard oversized fragments, and periodically write `:C\n`; do not copy its MAC address or UUIDs as app constants.
 
@@ -660,7 +662,7 @@ git commit -m "feat: add ble transport"
 - `BleStateReducer.reduce(state, event, parser, nowMs)` maps BLE events into UI state.
 - `BleViewModel` exposes `StateFlow<BleUiState>` and functions `startScan()`, `stopScan()`, `connect(device)`, `disconnect()`, and `clearLog()`.
 
-- [ ] **Step 1: Write reducer test**
+- [x] **Step 1: Write reducer test**
 
 ```kotlin
 @Test
@@ -693,7 +695,7 @@ fun notificationUpdatesLogAndReading() {
 }
 ```
 
-- [ ] **Step 2: Write ViewModel test**
+- [x] **Step 2: Write ViewModel test**
 
 ```kotlin
 @Test
@@ -721,7 +723,7 @@ fun connectSavesSuccessfulProfileAndKeepsLogBounded() = runTest {
 }
 ```
 
-- [ ] **Step 3: Implement UI**
+- [x] **Step 3: Implement UI**
 
 The first screen must be the working utility app, not a marketing screen. It must show:
 
@@ -737,7 +739,7 @@ The first screen must be the working utility app, not a marketing screen. It mus
 
 Do not add a raw arbitrary write box in v1. The only automatic write in v1 is the KMF totals poll `:C\n`.
 
-- [ ] **Step 4: Run UI unit tests**
+- [x] **Step 4: Run UI unit tests**
 
 ```bash
 ./gradlew :app:testDebugUnitTest --tests 'com.juncehome.lifepo4ble.ui.*'
@@ -756,7 +758,7 @@ On a physical Android device:
 - wait at least 35 seconds and confirm one outbound `:C\n` log entry and a parsed `C=` total if the meter responds
 - rotate the device and confirm the ViewModel state survives
 
-- [ ] **Step 6: Commit when inside a Git repository**
+- [x] **Step 6: Commit when inside a Git repository**
 
 ```bash
 git rev-parse --is-inside-work-tree

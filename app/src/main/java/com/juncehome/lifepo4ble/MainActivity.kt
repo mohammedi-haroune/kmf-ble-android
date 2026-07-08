@@ -7,13 +7,18 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.juncehome.lifepo4ble.platform.BlePermissionPolicy
+import com.juncehome.lifepo4ble.ui.BleViewModel
 
 class MainActivity : ComponentActivity() {
-    private var readiness by mutableStateOf(BleReadinessUiState())
+    private val viewModel: BleViewModel by lazy {
+        ViewModelProvider(
+            owner = this,
+            factory = (application as BleApplication).graph.bleViewModelFactory,
+        )[BleViewModel::class.java]
+    }
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -25,8 +30,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         refreshReadiness()
         setContent {
+            val state = viewModel.uiState.collectAsStateWithLifecycle().value
             KmfBleApp(
-                readiness = readiness,
+                state = state,
+                viewModel = viewModel,
                 onRequestPermissions = ::requestBlePermissions,
             )
         }
@@ -51,7 +58,7 @@ class MainActivity : ComponentActivity() {
         val hasBleFeature = packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)
         val adapter = getSystemService(BluetoothManager::class.java)?.adapter
 
-        readiness = BleReadinessUiState(
+        viewModel.updateReadiness(
             requiredPermissions = requiredPermissions,
             grantedPermissions = grantedPermissions,
             hasBleFeature = hasBleFeature,
