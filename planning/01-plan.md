@@ -15,9 +15,10 @@
 - Task 4 physical BLE smoke test is pending because no Android device or KMF meter is attached in this environment.
 - Task 5 local implementation is complete: ViewModel, reducer, Compose utility screen, and JVM UI tests.
 - Task 5 manual UI smoke test is pending because no Android device or KMF meter is attached in this environment.
-- Task 6 local documentation and verification were rerun on 2026-07-08 and are still complete: `:app:assembleDebug` and `:app:testDebugUnitTest` passed again.
-- Task 6 physical meter validation and `neverForLocation` fallback decision are still pending: local verification was rerun on 2026-07-08, and this wrap-up only confirmed that `adb devices` can see an attached Android device; no APK install, scan, connection, or KMF meter validation was executed in this phase.
-- Continue next with an attached Android device and KMF meter, then execute Task 6 Step 3 and Step 4 and record the outcome in `docs/meter-protocol-notes.md`.
+- Task 6 local documentation and verification were rerun on 2026-07-08 and are complete: `:app:assembleDebug` and `:app:testDebugUnitTest` passed again.
+- Task 6 physical meter validation is complete on 2026-07-08: on Android 14 device `CPH2399`, the app discovered `KMF271158` with `neverForLocation`, selected service `4fafc201-1fb5-459e-8fcc-c5c9c331914b`, enabled CCCD notifications on `beb5483e-36e1-4688-b7f5-ea07361b26a8`, parsed live `A=` and `C=` frames, wrote `:C\n`, and passed disconnect/reconnect plus relaunch-and-reconnect checks.
+- Task 6 permission fallback decision is complete: keep `android:usesPermissionFlags="neverForLocation"` unchanged because the real meter was discoverable on the validation device.
+- This implementation phase is wrapped up. Continue next only if a new behavior change or product decision is needed.
 
 **Architecture:** The app is a single-activity native Android app. It has four boundaries: Android permission/Bluetooth readiness, BLE transport with a serialized GATT operation queue, KMF protocol parsing based on `kmf.yml`, and ViewModel/Compose UI state. `kmf.yml` is the behavior reference for how to receive and parse KMF BLE data: notify on the data characteristic, buffer text until CR/LF, parse `A=` and `C=` lines, discard oversized fragments, and periodically write `:C\n`; do not copy its MAC address or UUIDs as app constants.
 
@@ -833,11 +834,23 @@ redacted sample C line:
 
 Expected: build and unit tests pass.
 
-- [ ] **Step 3: Run physical meter validation**
+- [x] **Step 3: Run physical meter validation**
 
 Use a real KMF meter:
 
-Current status on 2026-07-08: not executed in this wrap-up. `adb devices` confirmed an attached Android device, but no KMF meter session was exercised yet.
+Observed on 2026-07-08:
+
+- validation device: `CPH2399` running Android 14
+- scan found meter `KMF271158` with `neverForLocation`
+- selected service UUID: `4fafc201-1fb5-459e-8fcc-c5c9c331914b`
+- selected notify UUID: `beb5483e-36e1-4688-b7f5-ea07361b26a8`
+- selected write UUID: `beb5483e-36e1-4688-b7f5-ea07361b26a8`
+- CCCD write succeeded with descriptor `00002902-0000-1000-8000-00805f9b34fb` value `01 00`
+- live `A=` notifications parsed, for example `:A=1327,950,0,6635,1`
+- outbound poll `:C\n` logged and completed successfully
+- live `C=` totals parsed, for example `:C=1820,474,0,0,0,0,`
+- disconnect and reconnect both succeeded
+- after force-stop and relaunch, the app came back disconnected; after rescan/reconnect it reused the saved profile and displayed the same UUIDs again
 
 - install debug APK
 - grant permissions
@@ -850,7 +863,7 @@ Current status on 2026-07-08: not executed in this wrap-up. `adb devices` confir
 - disconnect and reconnect
 - force-close and reopen app to verify restored device/UUID display
 
-- [ ] **Step 4: Decide permission fallback**
+- [x] **Step 4: Decide permission fallback**
 
 If `neverForLocation` scan fails to discover the meter on the physical test device:
 
@@ -861,7 +874,7 @@ If `neverForLocation` scan fails to discover the meter on the physical test devi
 
 If scan succeeds, keep the manifest unchanged.
 
-Current status on 2026-07-08: no decision yet because the `neverForLocation` scan has still not been exercised against a real KMF meter in this phase.
+Current status on 2026-07-08: keep `neverForLocation` as-is because the real KMF meter was discovered successfully on the validation device.
 
 - [x] **Step 5: Commit when inside a Git repository**
 
