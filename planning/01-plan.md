@@ -10,8 +10,9 @@
 
 - Task 1 is complete: native Android scaffold, permission policy, Gradle wrapper, first commit, and debug install to a USB-connected phone.
 - Task 2 is complete: KMF protocol parser and packet logging.
-- Continue with Task 3 next: GATT profile discovery, selection, and persistence models.
-- Tasks 3-6 are not implemented yet.
+- Task 3 is complete: GATT profile discovery, selection, and persistence models.
+- Continue with Task 4 next: BLE scanner, session, and serialized GATT queue.
+- Tasks 4-6 are not implemented yet.
 
 **Architecture:** The app is a single-activity native Android app. It has four boundaries: Android permission/Bluetooth readiness, BLE transport with a serialized GATT operation queue, KMF protocol parsing based on `kmf.yml`, and ViewModel/Compose UI state. `kmf.yml` is the behavior reference for how to receive and parse KMF BLE data: notify on the data characteristic, buffer text until CR/LF, parse `A=` and `C=` lines, discard oversized fragments, and periodically write `:C\n`; do not copy its MAC address or UUIDs as app constants.
 
@@ -397,7 +398,7 @@ git commit -m "feat: add kmf protocol parser"
 - `DeviceSnapshot(address: String, name: String?, serviceUuid: String?, notifyUuid: String?, writeUuid: String?)`.
 - `DeviceStore.snapshot: Flow<DeviceSnapshot?>`, `save(snapshot)`, and `clear()`.
 
-- [ ] **Step 1: Write failing selector tests**
+- [x] **Step 1: Write failing selector tests**
 
 ```kotlin
 @Test
@@ -454,7 +455,7 @@ fun returnsNullWhenNoNotifyOrIndicateCharacteristicHasCccd() {
 }
 ```
 
-- [ ] **Step 2: Implement selector scoring**
+- [x] **Step 2: Implement selector scoring**
 
 Selection rules:
 
@@ -464,7 +465,7 @@ Selection rules:
 4. If multiple services tie, choose the one with the fewest characteristics, then stable UUID string order.
 5. Return `null` when no safe profile exists; do not guess.
 
-- [ ] **Step 3: Write and implement DataStore test**
+- [x] **Step 3: Write and implement DataStore test**
 
 ```kotlin
 class DeviceStoreTest {
@@ -491,7 +492,7 @@ class DeviceStoreTest {
 }
 ```
 
-- [ ] **Step 4: Run selector and store tests**
+- [x] **Step 4: Run selector and store tests**
 
 ```bash
 ./gradlew :app:testDebugUnitTest --tests 'com.juncehome.lifepo4ble.ble.GattProfileSelectorTest' --tests 'com.juncehome.lifepo4ble.data.DeviceStoreTest'
@@ -499,7 +500,7 @@ class DeviceStoreTest {
 
 Expected: tests pass.
 
-- [ ] **Step 5: Commit when inside a Git repository**
+- [x] **Step 5: Commit when inside a Git repository**
 
 ```bash
 git rev-parse --is-inside-work-tree
