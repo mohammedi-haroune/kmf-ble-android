@@ -1,0 +1,269 @@
+substitutions:
+  name: "junctek-km140f"
+  friendly_name: "Junctek KM140F"
+  # MAC-адреса Bluetooth модуля монітора (формат BTGxxx).
+  # Знайти можна через ESPHome BLE tracker лог, або через nRF Connect /
+  # LightBlue на телефоні — шукай пристрій з назвою BTGxxx.
+  mac_address: "48:31:B7:5A:B0:0A"
+  # Ємність батареї в Ah — потрібна тільки для обчислення SoC%,
+  # якщо сам монітор не передає відсоток напряму.
+  battery_capacity_ah: "100"
+  poll_interval: "5s"
+
+esphome:
+  name: kmfjunktetc
+  friendly_name: KMFjunktec
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+
+# Enable logging
+logger:
+  level: DEBUG
+  logs:
+    esp32_ble_client: DEBUG
+    esp32_ble: DEBUG
+    esp32_ble_tracker: DEBUG
+    component: ERROR   # прибираємо шум про "took a long time"
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "YOUR_KEY____________________"
+
+ota:
+  - platform: esphome
+    password: "YOUR_KEY____________________"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Kmfjunktec Fallback Hotspot"
+    password: "ehPwkMs89pMf"
+
+captive_portal:
+
+
+###############################################################################
+# BLE
+################################################################################
+
+esp32_ble_tracker:
+
+ble_client:
+  - mac_address: ${mac_address}
+    id: km140f_ble
+
+# Text line accumulation buffer — collects incoming bytes until \r or \n.
+globals:
+  - id: ble_buffer
+    type: std::string
+    restore_value: false
+
+sensor:
+  # Raw BLE characteristic listener — all parsing happens in the lambda below.
+  - platform: ble_client
+    type: characteristic
+    ble_client_id: km140f_ble
+    id: km140f_raw
+    internal: true
+    service_uuid: "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+    characteristic_uuid: "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+    notify: true
+    lambda: |-
+      // Accumulate bytes until end-of-line, then parse the complete line.
+      for (uint8_t b : x) {
+        if (b == '\n' || b == '\r') {
+          if (!id(ble_buffer).empty()) {
+            std::string line = id(ble_buffer);
+            id(ble_buffer).clear();
+
+            // Detect line type: :A=, :C=
+            std::string prefix;
+            size_t eq = std::string::npos;
+            if      ((eq = line.find("A=")) != std::string::npos) { prefix = "A"; }
+            else if ((eq = line.find("C=")) != std::string::npos) { prefix = "C"; }
+
+            if (!prefix.empty()) {
+              // Split CSV payload into fields vector.
+              std::string csv = line.substr(eq + 2);
+              std::vector<std::string> fields;
+              size_t pos = 0;
+              while (pos < csv.size()) {
+                size_t comma = csv.find(',', pos);
+                if (comma == std::string::npos) comma = csv.size();
+                fields.push_back(csv.substr(pos, comma - pos));
+                pos = comma + 1;
+              }
+
+              auto get_long = [&](size_t idx) -> long {
+                if (idx < fields.size() && !fields[idx].empty())
+                  return strtol(fields[idx].c_str(), nullptr, 10);
+                return 0;
+              };
+
+              if (prefix == "A" && fields.size() >= 6) {
+                float voltage     = get_long(0) / 100.0f;
+                float current_abs = get_long(1) / 1000.0f;
+                bool  charging    = (get_long(2) == 1);
+                long  mins        = get_long(3);
+                float ah_remain   = get_long(4) / 1000.0f;
+                float capacity    = get_long(5) / 10.0f;
+
+                // Sign: positive = charging, negative = discharging.
+                float signed_current = charging ? current_abs : -current_abs;
+                // Power = V * A, computed from raw integers to avoid float rounding.
+                // voltage(*0.01) * current(*0.001) = raw0*raw1 / 100000
+                float power = (get_long(0) * get_long(1)) / 100000.0f;
+                float signed_power = charging ? power : -power;
+
+                id(voltage_sensor).publish_state(voltage);
+                id(current_sensor).publish_state(signed_current);
+                id(power_sensor).publish_state(signed_power);
+                id(minutes_remaining_sensor).publish_state((float) mins);
+                id(ah_remaining_sensor).publish_state(ah_remain);
+                id(capacity_setting_sensor).publish_state(capacity);
+                id(charging_sensor).publish_state(charging);
+                id(status_sensor).publish_state(charging ? "Charging" : "Discharging");
+
+                // SoC = remaining / set capacity (ratio, not a raw % field).
+                if (capacity > 0) {
+                  float soc = (ah_remain / capacity) * 100.0f;
+                  if (soc > 100) soc = 100;
+                  if (soc < 0)   soc = 0;
+                  id(soc_sensor).publish_state(soc);
+                }
+
+              } else if (prefix == "C" && fields.size() >= 2) {
+                id(charge_kwh_sensor).publish_state(get_long(0) / 1000.0f);
+                id(discharge_kwh_sensor).publish_state(get_long(1) / 1000.0f);
+              }
+            }
+          }
+        } else {
+          id(ble_buffer) += (char) b;
+          // Safety: discard oversized buffer (e.g. on corrupt data).
+          if (id(ble_buffer).size() > 200)
+            id(ble_buffer).clear();
+        }
+      }
+      return {};
+
+  - platform: template
+    name: "${friendly_name} Voltage"
+    id: voltage_sensor
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: never
+
+  - platform: template
+    name: "${friendly_name} Current"
+    id: current_sensor
+    unit_of_measurement: "A"
+    device_class: current
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: never
+
+  - platform: template
+    name: "${friendly_name} Power"
+    id: power_sensor
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: never
+
+  - platform: template
+    name: "${friendly_name} Remaining Capacity"
+    id: ah_remaining_sensor
+    unit_of_measurement: "Ah"
+    state_class: measurement
+    accuracy_decimals: 3
+    icon: "mdi:battery-charging"
+    update_interval: never
+
+  - platform: template
+    name: "${friendly_name} Time Remaining"
+    id: minutes_remaining_sensor
+    unit_of_measurement: "min"
+    icon: "mdi:timer-sand"
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: never
+
+  - platform: template
+    name: "${friendly_name} Set Capacity"
+    id: capacity_setting_sensor
+    unit_of_measurement: "Ah"
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: "mdi:battery-charging-100"
+    update_interval: never
+    entity_category: diagnostic
+
+  - platform: template
+    name: "${friendly_name} Total Energy Charged"
+    id: charge_kwh_sensor
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total_increasing
+    accuracy_decimals: 3
+    update_interval: never
+
+  - platform: template
+    name: "${friendly_name} Total Energy Discharged"
+    id: discharge_kwh_sensor
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total_increasing
+    accuracy_decimals: 3
+    update_interval: never
+
+  - platform: template
+    name: "${friendly_name} State of Charge"
+    id: soc_sensor
+    unit_of_measurement: "%"
+    device_class: battery
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: never
+
+  - platform: ble_client
+    type: rssi
+    ble_client_id: km140f_ble
+    name: "${friendly_name} RSSI"
+    entity_category: diagnostic
+
+binary_sensor:
+  - platform: template
+    name: "${friendly_name} Charging"
+    id: charging_sensor
+    device_class: battery_charging
+    internal: true
+
+text_sensor:
+  - platform: template
+    name: "${friendly_name} Status"
+    id: status_sensor
+    icon: "mdi:battery-arrow-up-outline"
+    update_interval: never
+
+# Request :C= (energy totals) every 30 s.
+# :A= is pushed by the device automatically — no request needed.
+interval:
+  - interval: 30s
+    then:
+      - ble_client.ble_write:
+          id: km140f_ble
+          service_uuid: "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+          characteristic_uuid: "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+          value: [0x3A, 0x43, 0x0A]  # ":C\n"
