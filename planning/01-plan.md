@@ -9,8 +9,9 @@
 ## Progress
 
 - Task 1 is complete: native Android scaffold, permission policy, Gradle wrapper, first commit, and debug install to a USB-connected phone.
-- Continue with Task 2 next: KMF protocol parser and packet logging.
-- Tasks 2-6 are not implemented yet.
+- Task 2 is complete: KMF protocol parser and packet logging.
+- Continue with Task 3 next: GATT profile discovery, selection, and persistence models.
+- Tasks 3-6 are not implemented yet.
 
 **Architecture:** The app is a single-activity native Android app. It has four boundaries: Android permission/Bluetooth readiness, BLE transport with a serialized GATT operation queue, KMF protocol parsing based on `kmf.yml`, and ViewModel/Compose UI state. `kmf.yml` is the behavior reference for how to receive and parse KMF BLE data: notify on the data characteristic, buffer text until CR/LF, parse `A=` and `C=` lines, discard oversized fragments, and periodically write `:C\n`; do not copy its MAC address or UUIDs as app constants.
 
@@ -261,7 +262,7 @@ If it fails or prints anything else, skip the commit and continue.
 - `KmfLineParser.offer(bytes: ByteArray): List<KmfFrame>` buffers bytes until CR/LF, accepts `A=` or `C=` anywhere in the line, and clears the buffer after 200 bytes.
 - `KmfReadingMerger.apply(reading: KmfReading, frame: KmfFrame): KmfReading` merges partial `A` and `C` updates without erasing previous values.
 
-- [ ] **Step 1: Write failing formatter test**
+- [x] **Step 1: Write failing formatter test**
 
 ```kotlin
 @Test
@@ -278,7 +279,7 @@ fun formatsBytesForLogDisplay() {
 }
 ```
 
-- [ ] **Step 2: Write failing parser tests from `kmf.yml` behavior**
+- [x] **Step 2: Write failing parser tests from `kmf.yml` behavior**
 
 ```kotlin
 @Test
@@ -320,7 +321,7 @@ fun discardsOversizedLineWithoutThrowing() {
 }
 ```
 
-- [ ] **Step 3: Write failing merge test**
+- [x] **Step 3: Write failing merge test**
 
 ```kotlin
 @Test
@@ -351,11 +352,11 @@ fun cFrameDoesNotEraseLatestAReading() {
 }
 ```
 
-- [ ] **Step 4: Implement protocol types and parser**
+- [x] **Step 4: Implement protocol types and parser**
 
 Use `String(bytes, Charsets.US_ASCII)` for text conversion. Treat malformed integers, missing fields, and unknown lines as ignored input. Do not throw from `offer`.
 
-- [ ] **Step 5: Run protocol tests**
+- [x] **Step 5: Run protocol tests**
 
 ```bash
 ./gradlew :app:testDebugUnitTest --tests 'com.juncehome.lifepo4ble.protocol.*'
@@ -363,7 +364,7 @@ Use `String(bytes, Charsets.US_ASCII)` for text conversion. Treat malformed inte
 
 Expected: protocol tests pass.
 
-- [ ] **Step 6: Commit when inside a Git repository**
+- [x] **Step 6: Commit when inside a Git repository**
 
 ```bash
 git rev-parse --is-inside-work-tree
