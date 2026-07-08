@@ -11,8 +11,10 @@
 - Task 1 is complete: native Android scaffold, permission policy, Gradle wrapper, first commit, and debug install to a USB-connected phone.
 - Task 2 is complete: KMF protocol parser and packet logging.
 - Task 3 is complete: GATT profile discovery, selection, and persistence models.
-- Continue with Task 4 next: BLE scanner, session, and serialized GATT queue.
-- Tasks 4-6 are not implemented yet.
+- Task 4 local implementation is complete: BLE scanner, session, serialized GATT queue, repository, and JVM BLE tests.
+- Task 4 physical BLE smoke test is pending because no Android device or KMF meter is attached in this environment.
+- Continue with Task 5 next: ViewModel, reducer, and Compose utility screen.
+- Tasks 5-6 are not implemented yet.
 
 **Architecture:** The app is a single-activity native Android app. It has four boundaries: Android permission/Bluetooth readiness, BLE transport with a serialized GATT operation queue, KMF protocol parsing based on `kmf.yml`, and ViewModel/Compose UI state. `kmf.yml` is the behavior reference for how to receive and parse KMF BLE data: notify on the data characteristic, buffer text until CR/LF, parse `A=` and `C=` lines, discard oversized fragments, and periodically write `:C\n`; do not copy its MAC address or UUIDs as app constants.
 
@@ -533,7 +535,7 @@ git commit -m "feat: add gatt profile selection"
 - `BleSession.write(bytes: ByteArray): Boolean` enqueues a write only after the profile is ready.
 - `GattOperationQueue` serializes descriptor and characteristic writes and completes each operation from the matching callback.
 
-- [ ] **Step 1: Write GATT queue behavior test**
+- [x] **Step 1: Write GATT queue behavior test**
 
 Use a fake operation queue transport, not Android framework classes:
 
@@ -559,7 +561,7 @@ fun runsOnlyOneGattWriteAtATime() = runTest {
 }
 ```
 
-- [ ] **Step 2: Implement BLE session sequencing**
+- [x] **Step 2: Implement BLE session sequencing**
 
 The session must execute this exact order:
 
@@ -576,7 +578,7 @@ The session must execute this exact order:
 
 Use API 33+ overloads for characteristic and descriptor writes when available. Do not mutate characteristic values globally on API 33+.
 
-- [ ] **Step 3: Implement scanner**
+- [x] **Step 3: Implement scanner**
 
 `BleScanner.scan()` must:
 
@@ -585,7 +587,7 @@ Use API 33+ overloads for characteristic and descriptor writes when available. D
 - still allow showing all devices through the UI because the meter naming is not guaranteed
 - stop scanning when the flow collector is cancelled
 
-- [ ] **Step 4: Implement repository tests with fakes**
+- [x] **Step 4: Implement repository tests with fakes**
 
 ```kotlin
 @Test
@@ -603,7 +605,7 @@ fun repositoryStopsScanBeforeConnecting() = runTest {
 }
 ```
 
-- [ ] **Step 5: Run BLE unit tests**
+- [x] **Step 5: Run BLE unit tests**
 
 ```bash
 ./gradlew :app:testDebugUnitTest --tests 'com.juncehome.lifepo4ble.ble.*'
@@ -625,7 +627,7 @@ Install on one API 30 device or emulator with BLE support and one API 31+ physic
 
 Record observations in `docs/meter-protocol-notes.md` with the real MAC address redacted.
 
-- [ ] **Step 7: Commit when inside a Git repository**
+- [x] **Step 7: Commit when inside a Git repository**
 
 ```bash
 git rev-parse --is-inside-work-tree
