@@ -15,8 +15,9 @@
 - Task 4 physical BLE smoke test is pending because no Android device or KMF meter is attached in this environment.
 - Task 5 local implementation is complete: ViewModel, reducer, Compose utility screen, and JVM UI tests.
 - Task 5 manual UI smoke test is pending because no Android device or KMF meter is attached in this environment.
-- Continue with Task 6 next: final device validation notes and README.
-- Task 6 is not implemented yet.
+- Task 6 local documentation and verification are complete: protocol notes template, README, debug build, and JVM tests.
+- Task 6 physical meter validation and `neverForLocation` fallback decision are pending because no Android device or KMF meter is attached in this environment.
+- Continue next with physical KMF meter validation on an attached Android device.
 
 **Architecture:** The app is a single-activity native Android app. It has four boundaries: Android permission/Bluetooth readiness, BLE transport with a serialized GATT operation queue, KMF protocol parsing based on `kmf.yml`, and ViewModel/Compose UI state. `kmf.yml` is the behavior reference for how to receive and parse KMF BLE data: notify on the data characteristic, buffer text until CR/LF, parse `A=` and `C=` lines, discard oversized fragments, and periodically write `:C\n`; do not copy its MAC address or UUIDs as app constants.
 
@@ -781,7 +782,7 @@ git commit -m "feat: add ble utility screen"
 - `meter-protocol-notes.md` records observed services, selected UUIDs, notification examples, poll examples, phone model, Android version, and whether `neverForLocation` discovered the meter.
 - `README.md` explains required Android version, permissions, BLE-only scope, and how to run tests.
 
-- [ ] **Step 1: Create protocol notes template**
+- [x] **Step 1: Create protocol notes template**
 
 Use this exact structure:
 
@@ -824,7 +825,7 @@ redacted sample C line:
 - Write failures:
 ````
 
-- [ ] **Step 2: Run full local verification**
+- [x] **Step 2: Run full local verification**
 
 ```bash
 ./gradlew :app:assembleDebug :app:testDebugUnitTest
@@ -858,7 +859,7 @@ If `neverForLocation` scan fails to discover the meter on the physical test devi
 
 If scan succeeds, keep the manifest unchanged.
 
-- [ ] **Step 5: Commit when inside a Git repository**
+- [x] **Step 5: Commit when inside a Git repository**
 
 ```bash
 git rev-parse --is-inside-work-tree
