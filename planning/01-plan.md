@@ -6,6 +6,12 @@
 
 **Project Root:** `/Users/mac/Workspace/junce-home/kmf-ble-android`
 
+## Progress
+
+- Task 1 is complete: native Android scaffold, permission policy, Gradle wrapper, first commit, and debug install to a USB-connected phone.
+- Continue with Task 2 next: KMF protocol parser and packet logging.
+- Tasks 2-6 are not implemented yet.
+
 **Architecture:** The app is a single-activity native Android app. It has four boundaries: Android permission/Bluetooth readiness, BLE transport with a serialized GATT operation queue, KMF protocol parsing based on `kmf.yml`, and ViewModel/Compose UI state. `kmf.yml` is the behavior reference for how to receive and parse KMF BLE data: notify on the data characteristic, buffer text until CR/LF, parse `A=` and `C=` lines, discard oversized fragments, and periodically write `:C\n`; do not copy its MAC address or UUIDs as app constants.
 
 **Tech Stack:** Kotlin, Android Gradle Plugin, Jetpack Compose, Material3, Coroutines, Flow/StateFlow, BluetoothLeScanner/BluetoothGatt, DataStore Preferences, JUnit4, kotlinx-coroutines-test, AndroidX test APIs.
@@ -144,7 +150,7 @@ Use `kmf.yml` as the source of truth for v1 data behavior:
 - `BlePermissionPolicy.requiredRuntimePermissions(sdkInt: Int): Set<String>` returns the runtime permissions needed before BLE operations.
 - `MainActivity` checks runtime permissions, BLE support, adapter presence, and adapter enabled state before rendering scan/connect controls.
 
-- [ ] **Step 1: Bootstrap Gradle wrapper in the project root**
+- [x] **Step 1: Bootstrap Gradle wrapper in the project root**
 
 Run from `/Users/mac/Workspace/junce-home/kmf-ble-android`:
 
@@ -154,7 +160,7 @@ gradle wrapper --gradle-version 8.13
 
 Expected: `gradlew` exists. If `gradle` is not installed, create the wrapper once with Android Studio or install a local Gradle distribution before continuing.
 
-- [ ] **Step 2: Write failing permission policy test**
+- [x] **Step 2: Write failing permission policy test**
 
 ```kotlin
 class BlePermissionPolicyTest {
@@ -187,7 +193,7 @@ Run:
 
 Expected: fails because the project and policy do not exist yet.
 
-- [ ] **Step 3: Create minimal app and permission policy**
+- [x] **Step 3: Create minimal app and permission policy**
 
 Implement `BlePermissionPolicy` exactly:
 
@@ -211,7 +217,7 @@ Create the manifest with the permission matrix from this plan. Create a minimal 
 - Bluetooth enabled status
 - placeholder text: `KMF BLE`
 
-- [ ] **Step 4: Run build and policy tests**
+- [x] **Step 4: Run build and policy tests**
 
 ```bash
 ./gradlew :app:assembleDebug :app:testDebugUnitTest
@@ -219,7 +225,7 @@ Create the manifest with the permission matrix from this plan. Create a minimal 
 
 Expected: build and tests pass.
 
-- [ ] **Step 5: Commit when inside a Git repository**
+- [x] **Step 5: Commit when inside a Git repository**
 
 ```bash
 git rev-parse --is-inside-work-tree

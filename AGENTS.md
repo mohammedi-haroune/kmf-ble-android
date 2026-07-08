@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository is currently centered on `kmf.yml`, the ESPHome BLE behavior reference, and `01-plan.md`, the implementation plan for the native Android app. Follow the file map in `01-plan.md` when scaffolding the app: root Gradle files (`settings.gradle.kts`, `build.gradle.kts`, `gradle/libs.versions.toml`), the Android module in `app/`, Kotlin sources under `app/src/main/java/com/juncehome/lifepo4ble/`, and unit tests under `app/src/test/java/com/juncehome/lifepo4ble/`.
+This repository is currently centered on `planning/kmf.yml`, the ESPHome BLE behavior reference, and `planning/01-plan.md`, the implementation plan for the native Android app. Follow the file map in `planning/01-plan.md` when scaffolding the app: root Gradle files (`settings.gradle.kts`, `build.gradle.kts`, `gradle/libs.versions.toml`), the Android module in `app/`, Kotlin sources under `app/src/main/java/com/juncehome/lifepo4ble/`, and unit tests under `app/src/test/java/com/juncehome/lifepo4ble/`.
 
 Keep boundaries clear: `platform/` for permission policy, `protocol/` for KMF parsing and packet logging, `ble/` for scanning/GATT/session code, `data/` for DataStore persistence, and `ui/` for ViewModel and Compose screens.
 
@@ -19,7 +19,7 @@ If `gradlew` does not exist yet, create it before relying on project-local Gradl
 
 Use Kotlin with Jetpack Compose, Material3, Coroutines, Flow/StateFlow, and manual dependency wiring. Source files and identifiers should remain ASCII-only. Prefer small, focused classes with names matching their responsibility, such as `BlePermissionPolicy`, `KmfLineParser`, `GattOperationQueue`, and `BleViewModel`.
 
-Do not hardcode observed KMF MAC addresses, service UUIDs, or characteristic UUIDs in app logic. Treat `kmf.yml` as a behavior reference, not an identifier source.
+Do not hardcode observed KMF MAC addresses, service UUIDs, or characteristic UUIDs in app logic. Treat `planning/kmf.yml` as a behavior reference, not an identifier source.
 
 ## Testing Guidelines
 
