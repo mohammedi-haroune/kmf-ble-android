@@ -88,6 +88,20 @@ APP_BASE_NAME=${0##*/}
 # Discard cd standard output in case $CDPATH is set (https://github.com/gradle/gradle/issues/25036)
 APP_HOME=$( cd -P "${APP_HOME:-./}" > /dev/null && printf '%s\n' "$PWD" ) || exit
 
+PROJECT_JDK_ENV=$APP_HOME/gradle/jdk.env
+if [ -z "$JAVA_HOME" ] && [ -r "$PROJECT_JDK_ENV" ] ; then
+    while IFS='=' read -r key value
+    do
+        case "$key" in
+          JAVA_HOME)
+            JAVA_HOME=$value
+            export JAVA_HOME
+            break
+            ;;
+        esac
+    done < "$PROJECT_JDK_ENV"
+fi
+
 # Use the maximum available, or set MAX_FD != -1 to use that value.
 MAX_FD=maximum
 

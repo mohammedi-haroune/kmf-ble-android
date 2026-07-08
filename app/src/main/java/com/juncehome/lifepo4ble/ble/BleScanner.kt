@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.content.Context
+import com.juncehome.lifepo4ble.AppLog
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -19,7 +20,9 @@ class AndroidBleScanner(
 ) : BleScanner {
     @SuppressLint("MissingPermission")
     override fun scan(): Flow<List<ScannedDevice>> = callbackFlow {
+        AppLog.d("scanner.scan()", "KMF-BLE")
         if (!hasScanPermission()) {
+            AppLog.e("scan permission missing", tag = "KMF-BLE")
             close(SecurityException("Missing BLE scan permission"))
             return@callbackFlow
         }
@@ -27,6 +30,7 @@ class AndroidBleScanner(
         val bluetoothManager = context.getSystemService(BluetoothManager::class.java)
         val scanner = bluetoothManager?.adapter?.bluetoothLeScanner
         if (scanner == null) {
+            AppLog.e("BLE scanner unavailable", tag = "KMF-BLE")
             close(IllegalStateException("Bluetooth LE scanner is not available"))
             return@callbackFlow
         }
@@ -35,12 +39,14 @@ class AndroidBleScanner(
         val callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 result.toScannedDevice()?.let { device ->
+                    AppLog.d("scan result ${device.address} name=${device.name} rssi=${device.rssi}", "KMF-BLE")
                     discovered[device.address] = device
                     trySend(discovered.values.sortedForDisplay())
                 }
             }
 
             override fun onBatchScanResults(results: MutableList<ScanResult>) {
+                AppLog.d("scan batch size=${results.size}", "KMF-BLE")
                 results.forEach { result ->
                     result.toScannedDevice()?.let { device ->
                         discovered[device.address] = device
@@ -50,18 +56,22 @@ class AndroidBleScanner(
             }
 
             override fun onScanFailed(errorCode: Int) {
+                AppLog.e("scan failed code=$errorCode", tag = "KMF-BLE")
                 close(IllegalStateException("BLE scan failed with code $errorCode"))
             }
         }
 
         try {
+            AppLog.d("startScan()", "KMF-BLE")
             scanner.startScan(callback)
         } catch (securityException: SecurityException) {
+            AppLog.e("startScan security exception", securityException, "KMF-BLE")
             close(securityException)
             return@callbackFlow
         }
 
         awaitClose {
+            AppLog.d("stopScan()", "KMF-BLE")
             try {
                 scanner.stopScan(callback)
             } catch (_: SecurityException) {

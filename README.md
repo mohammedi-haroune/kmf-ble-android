@@ -20,6 +20,12 @@ Native Android BLE utility for a KMF LiFePO4 meter.
 
 ## Development
 
+The POSIX Gradle wrapper loads the project-local Java home from `gradle/jdk.env` when `JAVA_HOME` is not already set:
+
+```bash
+JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+```
+
 Create the wrapper if needed:
 
 ```bash
@@ -48,6 +54,14 @@ Run focused BLE tests:
 
 ```bash
 ./gradlew :app:testDebugUnitTest --tests 'com.juncehome.lifepo4ble.ble.*'
+```
+
+Install the debug APK on a connected Android device:
+
+```bash
+adb devices
+./gradlew :app:assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 ## Meter Validation

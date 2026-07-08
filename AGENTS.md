@@ -8,10 +8,14 @@ Keep boundaries clear: `platform/` for permission policy, `protocol/` for KMF pa
 
 ## Build, Test, and Development Commands
 
+POSIX `./gradlew` commands load the repo-level JDK setting from `gradle/jdk.env` when `JAVA_HOME` is not already set: `JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home`.
+
 - `gradle wrapper --gradle-version 8.13`: creates the Gradle wrapper during initial scaffold.
 - `./gradlew :app:assembleDebug`: builds the debug Android APK.
 - `./gradlew :app:testDebugUnitTest`: runs JVM unit tests.
 - `./gradlew :app:testDebugUnitTest --tests 'com.juncehome.lifepo4ble.protocol.*'`: runs focused protocol tests.
+- `adb devices`: confirms a device is connected and authorized.
+- `adb install -r app/build/outputs/apk/debug/app-debug.apk`: installs the debug APK after `:app:assembleDebug`.
 
 If `gradlew` does not exist yet, create it before relying on project-local Gradle commands.
 

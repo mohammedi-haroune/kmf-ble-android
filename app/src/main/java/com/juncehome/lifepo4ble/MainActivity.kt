@@ -28,6 +28,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        (application as BleApplication).filesDir.resolve("kmf-ble.log").appendText("I/KMF-BLE: MainActivity.onCreate\n")
+        AppLog.d("MainActivity.onCreate", "KMF-BLE")
         refreshReadiness()
         setContent {
             val state = viewModel.uiState.collectAsStateWithLifecycle().value

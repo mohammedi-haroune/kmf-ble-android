@@ -15,9 +15,9 @@
 - Task 4 physical BLE smoke test is pending because no Android device or KMF meter is attached in this environment.
 - Task 5 local implementation is complete: ViewModel, reducer, Compose utility screen, and JVM UI tests.
 - Task 5 manual UI smoke test is pending because no Android device or KMF meter is attached in this environment.
-- Task 6 local documentation and verification are complete: protocol notes template, README, debug build, and JVM tests.
-- Task 6 physical meter validation and `neverForLocation` fallback decision are pending because no Android device or KMF meter is attached in this environment.
-- Continue next with physical KMF meter validation on an attached Android device.
+- Task 6 local documentation and verification were rerun on 2026-07-08 and are still complete: `:app:assembleDebug` and `:app:testDebugUnitTest` passed again.
+- Task 6 physical meter validation and `neverForLocation` fallback decision are still pending: local verification was rerun on 2026-07-08, and this wrap-up only confirmed that `adb devices` can see an attached Android device; no APK install, scan, connection, or KMF meter validation was executed in this phase.
+- Continue next with an attached Android device and KMF meter, then execute Task 6 Step 3 and Step 4 and record the outcome in `docs/meter-protocol-notes.md`.
 
 **Architecture:** The app is a single-activity native Android app. It has four boundaries: Android permission/Bluetooth readiness, BLE transport with a serialized GATT operation queue, KMF protocol parsing based on `kmf.yml`, and ViewModel/Compose UI state. `kmf.yml` is the behavior reference for how to receive and parse KMF BLE data: notify on the data characteristic, buffer text until CR/LF, parse `A=` and `C=` lines, discard oversized fragments, and periodically write `:C\n`; do not copy its MAC address or UUIDs as app constants.
 
@@ -837,6 +837,8 @@ Expected: build and unit tests pass.
 
 Use a real KMF meter:
 
+Current status on 2026-07-08: not executed in this wrap-up. `adb devices` confirmed an attached Android device, but no KMF meter session was exercised yet.
+
 - install debug APK
 - grant permissions
 - scan with `neverForLocation`
@@ -858,6 +860,8 @@ If `neverForLocation` scan fails to discover the meter on the physical test devi
 - rerun Task 1 permission tests and Task 6 physical validation
 
 If scan succeeds, keep the manifest unchanged.
+
+Current status on 2026-07-08: no decision yet because the `neverForLocation` scan has still not been exercised against a real KMF meter in this phase.
 
 - [x] **Step 5: Commit when inside a Git repository**
 

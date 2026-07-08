@@ -12,6 +12,7 @@ import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
 import android.content.Context
 import android.os.Build
+import com.juncehome.lifepo4ble.AppLog
 import com.juncehome.lifepo4ble.data.DeviceSnapshot
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
@@ -47,14 +48,17 @@ class AndroidBleSession(
 
     @SuppressLint("MissingPermission")
     override fun connect(device: ScannedDevice, preferred: DeviceSnapshot?): Flow<BleEvent> = callbackFlow {
+        AppLog.d("session.connect(address=${device.address}, name=${device.name}, preferred=${preferred?.serviceUuid ?: "none"})", TAG)
         val adapter = bluetoothManager.adapter
         if (adapter == null) {
+            AppLog.e("Bluetooth adapter is not available", tag = TAG)
             trySend(BleEvent.Error("Bluetooth adapter is not available"))
             close()
             return@callbackFlow
         }
 
         val bluetoothDevice = runCatching { adapter.getRemoteDevice(device.address) }.getOrElse { error ->
+            AppLog.e("Invalid BLE device address ${device.address}", error, TAG)
             trySend(BleEvent.Error("Invalid BLE device address", error))
             close(error)
             return@callbackFlow
@@ -66,14 +70,18 @@ class AndroidBleSession(
 
         val callback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+                AppLog.d("onConnectionStateChange(status=$status, newState=$newState, device=${device.address})", TAG)
                 when (newState) {
                     BluetoothProfile.STATE_CONNECTED -> {
+                        AppLog.d("GATT connected, starting service discovery", TAG)
                         trySend(BleEvent.Connected(device))
                         if (!gatt.discoverServices()) {
+                            AppLog.e("discoverServices() returned false", tag = TAG)
                             trySend(BleEvent.Error("Failed to start service discovery"))
                         }
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
+                        AppLog.d("GATT disconnected status=$status", TAG)
                         clearActiveSession()
                         trySend(BleEvent.Disconnected("GATT disconnected with status $status"))
                     }
@@ -81,28 +89,35 @@ class AndroidBleSession(
             }
 
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+                AppLog.d("onServicesDiscovered(status=$status, services=${gatt.services.size})", TAG)
                 if (status != BluetoothGatt.GATT_SUCCESS) {
+                    AppLog.e("Service discovery failed status=$status", tag = TAG)
                     trySend(BleEvent.Error("Service discovery failed with status $status"))
                     return
                 }
                 val profile = GattProfileSelector.select(gatt.services.toServiceInfo(), preferred)
                 if (profile == null) {
+                    AppLog.e("No safe notify/write GATT profile found", tag = TAG)
                     trySend(BleEvent.Error("No safe notify/write GATT profile found"))
                     return
                 }
+                AppLog.d("Selected profile service=${profile.serviceUuid} notify=${profile.notifyUuid} write=${profile.writeUuid} indications=${profile.usesIndications}", TAG)
                 val service = gatt.getService(profile.serviceUuid)
                 val notifyCharacteristic = service?.getCharacteristic(profile.notifyUuid)
                 val writeCharacteristic = service?.getCharacteristic(profile.writeUuid)
                 val cccd = notifyCharacteristic?.getDescriptor(CLIENT_CONFIG_DESCRIPTOR_UUID)
 
                 if (notifyCharacteristic == null || writeCharacteristic == null || cccd == null) {
+                    AppLog.e("Selected profile unavailable in discovered services", tag = TAG)
                     trySend(BleEvent.Error("Selected GATT profile is no longer available"))
                     return
                 }
                 if (!gatt.setCharacteristicNotification(notifyCharacteristic, true)) {
+                    AppLog.e("Failed to enable local notifications for ${notifyCharacteristic.uuid}", tag = TAG)
                     trySend(BleEvent.Error("Failed to enable local notifications"))
                     return
                 }
+                AppLog.d("Local notifications enabled for ${notifyCharacteristic.uuid}", TAG)
 
                 sessionScope.launch {
                     val cccdValue = if (profile.usesIndications) {
@@ -110,6 +125,7 @@ class AndroidBleSession(
                     } else {
                         BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                     }
+                    AppLog.d("Writing CCCD for ${notifyCharacteristic.uuid} value=${cccdValue.toHexString()}", TAG)
                     val subscribed = queue.enqueue("cccd") {
                         if (!gatt.writeDescriptorCompat(cccd, cccdValue)) {
                             queue.completeCurrent(success = false)
@@ -121,6 +137,7 @@ class AndroidBleSession(
                     }
 
                     activeWriteCharacteristic = writeCharacteristic
+                    AppLog.d("Write characteristic ready ${writeCharacteristic.uuid}", TAG)
                     trySend(BleEvent.ServicesDiscovered(profile))
                     startPolling(gatt, writeCharacteristic, this@callbackFlow, sessionScope)
                 }
@@ -131,6 +148,7 @@ class AndroidBleSession(
                 descriptor: BluetoothGattDescriptor,
                 status: Int,
             ) {
+                AppLog.d("onDescriptorWrite(uuid=${descriptor.uuid}, status=$status)", TAG)
                 queue.completeCurrent(status == BluetoothGatt.GATT_SUCCESS)
             }
 
@@ -139,6 +157,7 @@ class AndroidBleSession(
                 characteristic: BluetoothGattCharacteristic,
                 status: Int,
             ) {
+                AppLog.d("onCharacteristicWrite(uuid=${characteristic.uuid}, status=$status)", TAG)
                 queue.completeCurrent(status == BluetoothGatt.GATT_SUCCESS)
             }
 
@@ -149,6 +168,7 @@ class AndroidBleSession(
             ) {
                 @Suppress("DEPRECATION")
                 val value = characteristic.value ?: return
+                AppLog.d("onCharacteristicChanged(uuid=${characteristic.uuid}, bytes=${value.size}, hex=${value.toHexString()})", TAG)
                 trySend(BleEvent.NotificationReceived(characteristic.uuid, value.copyOf()))
             }
 
@@ -157,13 +177,16 @@ class AndroidBleSession(
                 characteristic: BluetoothGattCharacteristic,
                 value: ByteArray,
             ) {
+                AppLog.d("onCharacteristicChanged(uuid=${characteristic.uuid}, bytes=${value.size}, hex=${value.toHexString()})", TAG)
                 trySend(BleEvent.NotificationReceived(characteristic.uuid, value.copyOf()))
             }
         }
 
         val gatt = try {
+            AppLog.d("connectGatt(${device.address})", TAG)
             bluetoothDevice.connectLeGatt(context, callback)
         } catch (securityException: SecurityException) {
+            AppLog.e("Missing Bluetooth connect permission", securityException, TAG)
             trySend(BleEvent.Error("Missing Bluetooth connect permission", securityException))
             close(securityException)
             return@callbackFlow
@@ -182,6 +205,7 @@ class AndroidBleSession(
         val events = activeEvents ?: return false
         val scope = activeScope ?: return false
 
+        AppLog.d("write(${bytes.size} bytes) hex=${bytes.toHexString()}", TAG)
         scope.launch {
             writeGattBytes(gatt, writeCharacteristic, bytes, events)
         }
@@ -189,6 +213,7 @@ class AndroidBleSession(
     }
 
     override fun disconnect() {
+        AppLog.d("session.disconnect()", TAG)
         activeScope?.cancel()
         activeGatt?.let { disconnectGatt(it) }
         clearActiveSession()
@@ -202,6 +227,7 @@ class AndroidBleSession(
     ): Job = scope.launch {
         while (isActive) {
             delay(POLL_INTERVAL_MS)
+            AppLog.d("poll timer fired writing ${KMF_TOTALS_POLL.toHexString()}", TAG)
             writeGattBytes(gatt, writeCharacteristic, KMF_TOTALS_POLL, events)
         }
     }
@@ -212,6 +238,7 @@ class AndroidBleSession(
         bytes: ByteArray,
         events: SendChannel<BleEvent>,
     ): Boolean {
+        AppLog.d("queue write ${bytes.toHexString()} to ${characteristic.uuid}", TAG)
         events.trySend(BleEvent.WriteQueued(bytes.copyOf()))
         val success = queue.enqueue("characteristic") {
             if (!gatt.writeCharacteristicCompat(characteristic, bytes)) {
@@ -246,6 +273,7 @@ class AndroidBleSession(
             writeDescriptor(descriptor)
         }
     } catch (securityException: SecurityException) {
+        AppLog.e("Missing permission for descriptor write", securityException, TAG)
         activeEvents?.trySend(BleEvent.Error("Missing permission for descriptor write", securityException))
         false
     }
@@ -267,6 +295,7 @@ class AndroidBleSession(
             writeCharacteristic(characteristic)
         }
     } catch (securityException: SecurityException) {
+        AppLog.e("Missing permission for characteristic write", securityException, TAG)
         activeEvents?.trySend(BleEvent.Error("Missing permission for characteristic write", securityException))
         false
     }
@@ -316,9 +345,13 @@ class AndroidBleSession(
         )
 
     private companion object {
+        const val TAG = "KMF-BLE"
         private val CLIENT_CONFIG_DESCRIPTOR_UUID: UUID =
             UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
         private val KMF_TOTALS_POLL = byteArrayOf(0x3A, 0x43, 0x0A)
         private const val POLL_INTERVAL_MS = 30_000L
     }
 }
+
+private fun ByteArray.toHexString(): String =
+    joinToString(separator = " ") { "%02X".format(it.toInt() and 0xFF) }

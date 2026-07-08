@@ -1,13 +1,15 @@
 package com.juncehome.lifepo4ble.ble
 
+import com.juncehome.lifepo4ble.AppLog
 import com.juncehome.lifepo4ble.data.DeviceSnapshot
 import java.util.UUID
 
 object GattProfileSelector {
     fun select(services: List<GattServiceInfo>, preferred: DeviceSnapshot?): GattProfile? {
+        AppLog.d("select profile services=${services.size} preferred=${preferred?.serviceUuid ?: "none"}", "KMF-BLE")
         preferred?.toValidProfile(services)?.let { return it }
 
-        return services
+        val selected = services
             .flatMap { service -> service.candidates() }
             .minWithOrNull(
                 compareBy<ProfileCandidate> { it.rank }
@@ -17,6 +19,8 @@ object GattProfileSelector {
                     .thenBy { it.profile.writeUuid.toString() }
             )
             ?.profile
+        AppLog.d("selected profile=${selected?.serviceUuid ?: "none"} notify=${selected?.notifyUuid ?: "none"} write=${selected?.writeUuid ?: "none"}", "KMF-BLE")
+        return selected
     }
 
     private fun DeviceSnapshot.toValidProfile(services: List<GattServiceInfo>): GattProfile? {
@@ -30,6 +34,7 @@ object GattProfileSelector {
             ?: return null
 
         if (!notifyCharacteristic.canSubscribe || !writeCharacteristic.canWriteAny) {
+            AppLog.d("preferred profile invalid for service=$serviceUuid notify=$notifyUuid write=$writeUuid", "KMF-BLE")
             return null
         }
 
