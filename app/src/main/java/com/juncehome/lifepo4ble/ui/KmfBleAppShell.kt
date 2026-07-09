@@ -4,9 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -114,64 +112,6 @@ fun KmfBleAppShell(
 }
 
 @Composable
-private fun DashboardScreen(
-    state: BleUiState,
-    contentPadding: PaddingValues,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(contentPadding)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Text(
-            text = "Dashboard",
-            style = MaterialTheme.typography.headlineMedium,
-        )
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    text = "Current battery state",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                DashboardMetric("Connection", state.connectionState.name)
-                DashboardMetric("SoC", formatPercent(state.latestReading.socPercent))
-                DashboardMetric("Voltage", formatDecimal(state.latestReading.voltageV, "V"))
-                DashboardMetric("Current", formatDecimal(state.latestReading.currentA, "A"))
-                DashboardMetric("Power", formatDecimal(state.latestReading.powerW, "W"))
-            }
-        }
-        Text(
-            text = "Use Diagnostics for scan, connect, packet logs, and UUID details.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun DashboardMetric(
-    label: String,
-    value: String,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.titleLarge,
-        )
-    }
-}
-
-@Composable
 private fun PlaceholderScreen(
     title: String,
     description: String,
@@ -195,10 +135,3 @@ private fun PlaceholderScreen(
         )
     }
 }
-
-private fun formatPercent(value: Double): String = String.format("%.0f%%", value)
-
-private fun formatDecimal(
-    value: Double,
-    unit: String,
-): String = String.format("%.2f %s", value, unit)

@@ -14,7 +14,8 @@
 - Navigation Compose is in place, Dashboard is the start destination, and the old BLE utility screen now lives under Diagnostics.
 - Vico, fuller dashboard cards, history pages, and energy analytics are intentionally deferred.
 - `planning/INDEX.md` should treat this file as the active implementation plan.
-- Continue with Task 7 next: build the real dashboard cards and empty states.
+- Dashboard cards and empty states are in place.
+- Continue with Task 8 next: add the Vico live charts.
 
 ## Product Direction
 
@@ -230,12 +231,12 @@ Keeps debug tools:
 
 ### Task 7: Build Dashboard
 
-- [ ] Add `DashboardScreen`.
-- [ ] Add `BatteryHeroCard`.
-- [ ] Add `MetricCard`.
-- [ ] Add `EnergyTotalsCard`.
-- [ ] Add `ConnectionSummaryCard`.
-- [ ] Add empty states for no device/no data/disconnected.
+- [x] Add `DashboardScreen`.
+- [x] Add `BatteryHeroCard`.
+- [x] Add `MetricCard`.
+- [x] Add `EnergyTotalsCard`.
+- [x] Add `ConnectionSummaryCard`.
+- [x] Add empty states for no device/no data/disconnected.
 
 ### Task 8: Add Vico Live Charts
 
