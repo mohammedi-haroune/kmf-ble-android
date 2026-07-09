@@ -29,10 +29,13 @@ class BleViewModel(
     private val historyStore: KmfHistoryStore,
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val scope: CoroutineScope? = null,
+    private val reconnectDelayMs: Long = 1_000L,
 ) : ViewModel() {
     private val parser = KmfLineParser()
     private var bootstrapJob: Job? = null
     private var totalsPollJob: Job? = null
+    private var reconnectJob: Job? = null
+    private var manualDisconnectRequested = false
     private val workScope: CoroutineScope
         get() = scope ?: viewModelScope
 
@@ -48,7 +51,12 @@ class BleViewModel(
                 mutableUiState.value = nextState
                 persistHistory(event, nextState, nowMs)
 
+                if (event is BleEvent.Connecting || event is BleEvent.Connected) {
+                    cancelReconnect()
+                }
+
                 if (event is BleEvent.ServicesDiscovered) {
+                    cancelReconnect()
                     saveSnapshot(nextState.selectedDevice, event.profile)
                     startOfficialBootstrapSequence()
                 }
@@ -64,6 +72,18 @@ class BleViewModel(
                 ) {
                     cancelBackgroundWrites()
                 }
+
+                if (event is BleEvent.Disconnected) {
+                    if (manualDisconnectRequested) {
+                        manualDisconnectRequested = false
+                    } else if (shouldAutoReconnect(previousState)) {
+                        scheduleRememberedConnection("disconnect")
+                    }
+                }
+
+                if (event is BleEvent.Error && shouldAutoReconnect(previousState)) {
+                    scheduleRememberedConnection("error", requireDisconnected = false)
+                }
             }
         }
     }
@@ -75,14 +95,20 @@ class BleViewModel(
         hasBluetoothAdapter: Boolean,
         bluetoothEnabled: Boolean,
     ) {
-        mutableUiState.update { state ->
-            state.copy(
+        val previousState = mutableUiState.value
+        val nextState = previousState.copy(
                 requiredPermissions = requiredPermissions,
                 grantedPermissions = grantedPermissions,
                 hasBleFeature = hasBleFeature,
                 hasBluetoothAdapter = hasBluetoothAdapter,
                 bluetoothEnabled = bluetoothEnabled,
             )
+        mutableUiState.value = nextState
+
+        if (!previousState.readyToScan && nextState.readyToScan) {
+            scheduleRememberedConnection("readiness", delayMs = 0L)
+        } else if (previousState.readyToScan && !nextState.readyToScan) {
+            cancelReconnect()
         }
     }
 
@@ -98,12 +124,16 @@ class BleViewModel(
     }
 
     fun connect(device: ScannedDevice) {
+        manualDisconnectRequested = false
+        cancelReconnect()
         workScope.launch {
             repository.connect(device, preferred = deviceStore.snapshot.first())
         }
     }
 
     fun disconnect() {
+        manualDisconnectRequested = true
+        cancelReconnect()
         cancelBackgroundWrites()
         repository.disconnect()
     }
@@ -161,6 +191,48 @@ class BleViewModel(
         totalsPollJob?.cancel()
         totalsPollJob = null
     }
+
+    private fun scheduleRememberedConnection(
+        reason: String,
+        delayMs: Long = reconnectDelayMs,
+        requireDisconnected: Boolean = true,
+    ) {
+        if (reconnectJob?.isActive == true) {
+            return
+        }
+        reconnectJob = workScope.launch {
+            if (delayMs > 0) {
+                delay(delayMs)
+            }
+            if (manualDisconnectRequested) {
+                return@launch
+            }
+            val state = mutableUiState.value
+            if (!state.readyToScan) {
+                return@launch
+            }
+            if (requireDisconnected && state.connectionState != ConnectionState.DISCONNECTED) {
+                return@launch
+            }
+            val snapshot = deviceStore.snapshot.first() ?: return@launch
+            AppLog.d("auto connect reason=$reason address=${snapshot.address}", TAG)
+            repository.connect(snapshot.toScannedDevice(), preferred = snapshot)
+        }.also { job ->
+            job.invokeOnCompletion {
+                if (reconnectJob === job) {
+                    reconnectJob = null
+                }
+            }
+        }
+    }
+
+    private fun cancelReconnect() {
+        reconnectJob?.cancel()
+        reconnectJob = null
+    }
+
+    private fun shouldAutoReconnect(state: BleUiState): Boolean =
+        state.selectedDevice != null && state.connectionState != ConnectionState.DISCONNECTED
 
     private suspend fun saveSnapshot(device: ScannedDevice?, profile: GattProfile) {
         if (device == null) {
@@ -242,6 +314,14 @@ class BleViewModel(
         val KMF_TOTALS_POLL = byteArrayOf(0x3A, 0x43, 0x0A)
     }
 }
+
+private fun DeviceSnapshot.toScannedDevice(): ScannedDevice =
+    ScannedDevice(
+        name = name,
+        address = address,
+        rssi = 0,
+        serviceUuids = emptyList(),
+    )
 
 private fun ByteArray.toHexString(): String =
     joinToString(separator = " ") { "%02X".format(it.toInt() and 0xFF) }

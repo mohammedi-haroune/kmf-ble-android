@@ -65,6 +65,140 @@ class BleViewModelTest {
     }
 
     @Test
+    fun readyReadinessAutoConnectsRememberedDevice() = runTest {
+        val repo = FakeBleRepository()
+        val remembered = DeviceSnapshot(
+            address = "AA:BB:CC:DD:EE:FF",
+            name = "KMF",
+            serviceUuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            notifyUuid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            writeUuid = "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        )
+        val store = FakeDeviceStore(initial = remembered)
+        val historyStore = FakeHistoryStore()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = BleViewModel(
+            repo,
+            store,
+            historyStore,
+            clock = { 1L },
+            scope = viewModelScope,
+            reconnectDelayMs = 0L,
+        )
+
+        try {
+            advanceUntilIdle()
+            viewModel.updateReadiness(
+                requiredPermissions = setOf("scan"),
+                grantedPermissions = setOf("scan"),
+                hasBleFeature = true,
+                hasBluetoothAdapter = true,
+                bluetoothEnabled = true,
+            )
+            advanceUntilIdle()
+
+            assertEquals(1, repo.connectCalls.size)
+            assertEquals(remembered.address, repo.connectCalls.single().first.address)
+            assertEquals(remembered.name, repo.connectCalls.single().first.name)
+            assertEquals(remembered, repo.connectCalls.single().second)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun unexpectedDisconnectAutoReconnectsRememberedDeviceButManualDisconnectDoesNot() = runTest {
+        val repo = FakeBleRepository()
+        val remembered = DeviceSnapshot(
+            address = "AA:BB:CC:DD:EE:FF",
+            name = "KMF",
+            serviceUuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            notifyUuid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            writeUuid = "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        )
+        val store = FakeDeviceStore(initial = remembered)
+        val historyStore = FakeHistoryStore()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = BleViewModel(
+            repo,
+            store,
+            historyStore,
+            clock = { 2L },
+            scope = viewModelScope,
+            reconnectDelayMs = 0L,
+        )
+
+        try {
+            advanceUntilIdle()
+            viewModel.updateReadiness(
+                requiredPermissions = setOf("scan"),
+                grantedPermissions = setOf("scan"),
+                hasBleFeature = true,
+                hasBluetoothAdapter = true,
+                bluetoothEnabled = true,
+            )
+            advanceUntilIdle()
+            repo.events.emit(BleEvent.Connecting(repo.connectCalls.last().first))
+            repo.events.emit(BleEvent.Disconnected("signal lost"))
+            advanceUntilIdle()
+
+            assertEquals(2, repo.connectCalls.size)
+
+            viewModel.disconnect()
+            repo.events.emit(BleEvent.Disconnected("manual"))
+            advanceUntilIdle()
+
+            assertEquals(2, repo.connectCalls.size)
+            assertEquals(1, repo.disconnectCalls)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun connectionErrorAutoReconnectsRememberedDevice() = runTest {
+        val repo = FakeBleRepository()
+        val remembered = DeviceSnapshot(
+            address = "AA:BB:CC:DD:EE:FF",
+            name = "KMF",
+            serviceUuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            notifyUuid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            writeUuid = "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        )
+        val store = FakeDeviceStore(initial = remembered)
+        val historyStore = FakeHistoryStore()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = BleViewModel(
+            repo,
+            store,
+            historyStore,
+            clock = { 3L },
+            scope = viewModelScope,
+            reconnectDelayMs = 0L,
+        )
+
+        try {
+            advanceUntilIdle()
+            viewModel.updateReadiness(
+                requiredPermissions = setOf("scan"),
+                grantedPermissions = setOf("scan"),
+                hasBleFeature = true,
+                hasBluetoothAdapter = true,
+                bluetoothEnabled = true,
+            )
+            advanceUntilIdle()
+            repo.events.emit(BleEvent.Connecting(repo.connectCalls.last().first))
+            repo.events.emit(BleEvent.Error("connect failed"))
+            advanceUntilIdle()
+
+            assertEquals(2, repo.connectCalls.size)
+            assertEquals(remembered, repo.connectCalls.last().second)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
     fun persistsWritesAndInboundNotificationsUsingCurrentSessionContext() = runTest {
         val repo = FakeBleRepository()
         val store = FakeDeviceStore()
@@ -111,25 +245,28 @@ class BleViewModelTest {
 
     private class FakeBleRepository : BleRepositoryContract {
         override val events: MutableSharedFlow<BleEvent> = MutableSharedFlow(extraBufferCapacity = 300)
-        var connectedDevice: ScannedDevice? = null
+        val connectCalls = mutableListOf<Pair<ScannedDevice, DeviceSnapshot?>>()
+        var disconnectCalls = 0
 
         override fun startScan() = Unit
 
         override fun stopScan() = Unit
 
         override fun connect(device: ScannedDevice, preferred: DeviceSnapshot?) {
-            connectedDevice = device
+            connectCalls += device to preferred
         }
 
         override fun write(bytes: ByteArray): Boolean = true
 
         override fun requestMtu(mtu: Int): Boolean = true
 
-        override fun disconnect() = Unit
+        override fun disconnect() {
+            disconnectCalls += 1
+        }
     }
 
-    private class FakeDeviceStore : DeviceSnapshotStore {
-        private val snapshots = MutableStateFlow<DeviceSnapshot?>(null)
+    private class FakeDeviceStore(initial: DeviceSnapshot? = null) : DeviceSnapshotStore {
+        private val snapshots = MutableStateFlow(initial)
         var saved: DeviceSnapshot? = null
 
         override val snapshot: Flow<DeviceSnapshot?> = snapshots

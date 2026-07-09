@@ -18,7 +18,9 @@
 - Task 6 local documentation and verification were rerun on 2026-07-08 and are complete: `:app:assembleDebug` and `:app:testDebugUnitTest` passed again.
 - Task 6 physical meter validation is complete on 2026-07-08: on Android 14 device `CPH2399`, the app discovered `KMF271158` with `neverForLocation`, selected service `4fafc201-1fb5-459e-8fcc-c5c9c331914b`, enabled CCCD notifications on `beb5483e-36e1-4688-b7f5-ea07361b26a8`, parsed live `A=` and `C=` frames, wrote `:C\n`, and passed disconnect/reconnect plus relaunch-and-reconnect checks.
 - Task 6 permission fallback decision is complete: keep `android:usesPermissionFlags="neverForLocation"` unchanged because the real meter was discoverable on the validation device.
-- This implementation phase is wrapped up. Continue next only if a new behavior change or product decision is needed.
+- Task 7 local implementation is complete on 2026-07-09: the app remembers the last successful device, auto-connects to it when BLE readiness returns, auto-reconnects after unexpected disconnect or connection errors, and suppresses reconnect after an explicit manual disconnect.
+- Task 7 physical meter validation is complete on 2026-07-09: on Android 14 device `CPH2399`, a cold launch auto-connected to remembered device `KMF271158` using saved profile `4fafc201-1fb5-459e-8fcc-c5c9c331914b`, completed GATT service discovery and CCCD subscription, restarted `:*` bootstrap traffic, and tapping Disconnect left the app in `Connection: disconnected` without an automatic reconnect.
+- Task 7 behavior slice is complete. Continue next with `planning/plans/03-dashboard-history-vico.md` Task 6: add the navigation shell, make Dashboard the start destination, and move the current debug screen behavior into Diagnostics.
 
 **Architecture:** The app is a single-activity native Android app. It has four boundaries: Android permission/Bluetooth readiness, BLE transport with a serialized GATT operation queue, KMF protocol parsing based on `planning/resources/kmf.yml`, and ViewModel/Compose UI state. `planning/resources/kmf.yml` is the behavior reference for how to receive and parse KMF BLE data: notify on the data characteristic, buffer text until CR/LF, parse `A=` and `C=` lines, discard oversized fragments, and periodically write `:C\n`; do not copy its MAC address or UUIDs as app constants.
 
@@ -39,6 +41,7 @@
 - Show selected device, connection state, selected service UUID, notify UUID, write UUID, and live packet log.
 - Log inbound notifications and outbound writes with timestamp, direction, hex, ASCII, and byte length.
 - Persist only last connected device address/name and last successful UUID selection in DataStore.
+- Auto-connect only to the last saved device/profile and suppress reconnect after an explicit user-requested disconnect.
 - Bound the in-memory packet log to 200 entries.
 - Treat malformed BLE fragments as non-fatal; discard or log them, but never crash the session because of bad bytes.
 - All GATT descriptor and characteristic writes must be serialized through one operation queue.
@@ -132,6 +135,7 @@ Use `kmf.yml` as the source of truth for v1 data behavior:
 - The app displays voltage, signed current, signed power, charging status, remaining minutes, remaining Ah, capacity Ah, SoC percent, charge kWh, and discharge kWh.
 - The app writes and logs `:C\n` every 30 seconds after notification setup succeeds.
 - The last successful device address/name and UUID selection survive app restart.
+- When BLE readiness is restored, the app automatically reconnects to the last saved device unless the user explicitly disconnected.
 - Disconnect, permission denial, Bluetooth-off state, malformed bytes, failed descriptor writes, and failed characteristic writes produce visible non-fatal UI errors.
 
 ### Task 1: Scaffold Native Android App and Permission Policy
@@ -888,6 +892,56 @@ If true:
 git add .
 git commit -m "docs: document kmf ble validation"
 ```
+
+### Task 7: Remember Last Device and Auto Reconnect
+
+**Files:**
+- Modify: `app/src/main/java/com/juncehome/lifepo4ble/ui/BleViewModel.kt`
+- Modify: `app/src/test/java/com/juncehome/lifepo4ble/ui/BleViewModelTest.kt`
+
+**Interfaces:**
+- `BleViewModel.updateReadiness(...)` should auto-connect the last saved device when permissions, adapter, and Bluetooth state become ready.
+- `BleViewModel.disconnect()` must suppress reconnect for explicit user disconnects only.
+- Unexpected `BleEvent.Disconnected` or connection-path `BleEvent.Error` should schedule reconnect to the saved device with the saved profile.
+
+- [x] **Step 1: Add focused UI tests**
+
+Add coverage for:
+
+- auto-connect on readiness when `DeviceStore` already has a remembered device
+- auto-reconnect after unexpected disconnect
+- auto-reconnect after connection-path error
+- no auto-reconnect after manual disconnect
+
+- [x] **Step 2: Implement reconnect orchestration in the ViewModel**
+
+Rules:
+
+- keep reconnect control in the ViewModel, not in `BleSession`
+- reuse the saved `DeviceSnapshot` as the preferred profile for reconnects
+- only auto-connect when the app is BLE-ready
+- cancel pending reconnect work after manual disconnect or successful reconnect progress
+
+- [x] **Step 3: Run physical validation**
+
+On a connected Android device with the KMF meter available:
+
+- launch the app with a previously remembered device and verify it auto-connects without a manual scan tap
+- power-cycle or move the meter out of range, then restore it and verify the app reconnects on its own
+- tap Disconnect and verify the app stays disconnected until the user chooses to reconnect
+
+- [x] **Step 4: Run local verification**
+
+```bash
+./gradlew :app:testDebugUnitTest --tests 'com.juncehome.lifepo4ble.ui.*'
+./gradlew :app:assembleDebug :app:testDebugUnitTest
+```
+
+Current verification status on 2026-07-09:
+
+- focused `BleViewModel` JVM tests passed
+- `./gradlew :app:assembleDebug :app:testDebugUnitTest` passed
+- on Android 14 device `CPH2399`, cold launch auto-connect and manual disconnect suppression both passed
 
 ## Final Check
 
