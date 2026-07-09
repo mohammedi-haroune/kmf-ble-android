@@ -11,6 +11,7 @@ sealed interface KmfFrame {
         val capacityAh: Double,
         val socPercent: Double,
         val status: String,
+        val rawFields: List<Int> = emptyList(),
     ) : KmfFrame
 
     data class B(
@@ -20,5 +21,6 @@ sealed interface KmfFrame {
     data class C(
         val chargeKwh: Double,
         val dischargeKwh: Double,
+        val rawFields: List<Int> = emptyList(),
     ) : KmfFrame
 }

@@ -75,6 +75,7 @@ class KmfLineParserTest {
         assertEquals(104.274, frame.remainingAh, 0.001)
         assertEquals(0.0, frame.capacityAh, 0.001)
         assertEquals(0.0, frame.socPercent, 0.001)
+        assertEquals(listOf(1326, 1080, 0, 5793), frame.rawFields)
     }
 
     @Test
@@ -94,6 +95,15 @@ class KmfLineParserTest {
         val secondA = parser.offer(":A=1326,910,0,6865,1".encodeToByteArray()).single() as KmfFrame.A
         assertEquals(13.26, secondA.voltageV, 0.001)
         assertEquals(104.119, secondA.remainingAh, 0.001)
+    }
+
+    @Test
+    fun preservesRawFieldsForCFrames() {
+        val parser = KmfLineParser()
+
+        val frame = parser.offer(":C=1820,486,0,0,0,0,".encodeToByteArray()).single() as KmfFrame.C
+
+        assertEquals(listOf(1820, 486, 0, 0, 0, 0), frame.rawFields)
     }
 
     @Test

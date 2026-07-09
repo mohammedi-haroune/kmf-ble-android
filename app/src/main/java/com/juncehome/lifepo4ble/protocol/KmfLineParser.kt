@@ -8,6 +8,9 @@ class KmfLineParser(
 ) {
     private val buffer = StringBuilder()
     private var discardingOversizedLine = false
+    var lastOfferFrames: List<KmfFrame> = emptyList()
+        private set
+
     private companion object {
         const val TAG = "KMF-BLE"
         const val A_MARKER = "A="
@@ -32,16 +35,16 @@ class KmfLineParser(
             parseLine(text)?.let { frame ->
                 AppLog.d("parser frame=${frame.describe()}", TAG)
                 frames.add(frame)
-                return frames
+                return finish(frames)
             }
             if (text.startsWithKnownFrameMarker()) {
                 AppLog.d("parser buffering partial packet=$text", TAG)
                 buffer.append(text)
-                return frames
+                return finish(frames)
             }
             if (text.startsWithFrameMarker()) {
                 AppLog.d("parser ignored standalone packet=$text", TAG)
-                return frames
+                return finish(frames)
             }
         }
 
@@ -72,7 +75,7 @@ class KmfLineParser(
             }
         }
 
-        return frames
+        return finish(frames)
     }
 
     private fun flushBufferedLine(frames: MutableList<KmfFrame>) {
@@ -128,6 +131,7 @@ class KmfLineParser(
                     capacityAh = capacityAh,
                     socPercent = socPercent,
                     status = if (charging) "Charging" else "Discharging",
+                    rawFields = fields,
                 )
             }
             fields.size >= 4 && (fields.size == 4 || fields[4] in 0..1) -> {
@@ -148,6 +152,7 @@ class KmfLineParser(
                     capacityAh = 0.0,
                     socPercent = 0.0,
                     status = if (charging) "Charging" else "Discharging",
+                    rawFields = fields,
                 )
             }
             else -> null
@@ -161,6 +166,7 @@ class KmfLineParser(
         return KmfFrame.C(
             chargeKwh = fields[0] / 1000.0,
             dischargeKwh = fields[1] / 1000.0,
+            rawFields = fields,
         )
     }
 
@@ -190,6 +196,11 @@ class KmfLineParser(
             .filter { it >= 0 }
             .minOrNull()
             ?: Int.MAX_VALUE
+
+    private fun finish(frames: List<KmfFrame>): List<KmfFrame> {
+        lastOfferFrames = frames.toList()
+        return lastOfferFrames
+    }
 }
 
 private fun KmfFrame.describe(): String =

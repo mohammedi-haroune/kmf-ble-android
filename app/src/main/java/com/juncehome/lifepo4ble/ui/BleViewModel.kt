@@ -8,7 +8,11 @@ import com.juncehome.lifepo4ble.ble.GattProfile
 import com.juncehome.lifepo4ble.ble.ScannedDevice
 import com.juncehome.lifepo4ble.data.DeviceSnapshot
 import com.juncehome.lifepo4ble.data.DeviceSnapshotStore
+import com.juncehome.lifepo4ble.data.KmfHistoryStore
+import com.juncehome.lifepo4ble.data.KmfNotificationObservation
+import com.juncehome.lifepo4ble.data.KmfWriteObservation
 import com.juncehome.lifepo4ble.protocol.KmfLineParser
+import com.juncehome.lifepo4ble.ble.BleEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -22,6 +26,7 @@ import kotlinx.coroutines.launch
 class BleViewModel(
     private val repository: BleRepositoryContract,
     private val deviceStore: DeviceSnapshotStore,
+    private val historyStore: KmfHistoryStore,
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val scope: CoroutineScope? = null,
 ) : ViewModel() {
@@ -38,10 +43,12 @@ class BleViewModel(
         workScope.launch {
             repository.events.collect { event ->
                 val previousState = mutableUiState.value
-                val nextState = BleStateReducer.reduce(previousState, event, parser, clock())
+                val nowMs = clock()
+                val nextState = BleStateReducer.reduce(previousState, event, parser, nowMs)
                 mutableUiState.value = nextState
+                persistHistory(event, nextState, nowMs)
 
-                if (event is com.juncehome.lifepo4ble.ble.BleEvent.ServicesDiscovered) {
+                if (event is BleEvent.ServicesDiscovered) {
                     saveSnapshot(nextState.selectedDevice, event.profile)
                     startOfficialBootstrapSequence()
                 }
@@ -52,8 +59,8 @@ class BleViewModel(
                     startTotalsPollingIfNeeded()
                 }
 
-                if (event is com.juncehome.lifepo4ble.ble.BleEvent.Disconnected ||
-                    event is com.juncehome.lifepo4ble.ble.BleEvent.Error
+                if (event is BleEvent.Disconnected ||
+                    event is BleEvent.Error
                 ) {
                     cancelBackgroundWrites()
                 }
@@ -169,6 +176,58 @@ class BleViewModel(
                 writeUuid = profile.writeUuid.toString(),
             )
         )
+    }
+
+    private suspend fun persistHistory(
+        event: BleEvent,
+        state: BleUiState,
+        nowMs: Long,
+    ) {
+        when (event) {
+            is BleEvent.Connecting -> historyStore.resetSession(event.device.address)
+            is BleEvent.NotificationReceived -> {
+                val device = state.selectedDevice ?: return
+                try {
+                    historyStore.recordNotification(
+                        KmfNotificationObservation(
+                            timestampMs = nowMs,
+                            deviceAddress = device.address,
+                            deviceName = device.name,
+                            serviceUuid = state.serviceUuid,
+                            notifyUuid = state.notifyUuid,
+                            writeUuid = state.writeUuid,
+                            connectionState = state.connectionState.name,
+                            bytes = event.bytes.copyOf(),
+                            frames = parser.lastOfferFrames,
+                            mergedReading = state.latestReading,
+                        )
+                    )
+                } catch (error: Throwable) {
+                    AppLog.e("failed to persist inbound notification", error, TAG)
+                }
+            }
+            is BleEvent.WriteCompleted -> {
+                val device = state.selectedDevice ?: return
+                try {
+                    historyStore.recordWrite(
+                        KmfWriteObservation(
+                            timestampMs = nowMs,
+                            deviceAddress = device.address,
+                            deviceName = device.name,
+                            serviceUuid = state.serviceUuid,
+                            notifyUuid = state.notifyUuid,
+                            writeUuid = state.writeUuid,
+                            bytes = event.bytes.copyOf(),
+                            writeSuccess = event.success,
+                            error = if (event.success) null else "BLE write failed",
+                        )
+                    )
+                } catch (error: Throwable) {
+                    AppLog.e("failed to persist outbound write", error, TAG)
+                }
+            }
+            else -> Unit
+        }
     }
 
     private companion object {

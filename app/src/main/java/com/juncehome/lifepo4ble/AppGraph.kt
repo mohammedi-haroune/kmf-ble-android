@@ -8,10 +8,13 @@ import android.os.Build
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.room.Room
 import com.juncehome.lifepo4ble.ble.AndroidBleScanner
 import com.juncehome.lifepo4ble.ble.AndroidBleSession
 import com.juncehome.lifepo4ble.ble.BleRepository
 import com.juncehome.lifepo4ble.data.DeviceStore
+import com.juncehome.lifepo4ble.data.KmfDatabase
+import com.juncehome.lifepo4ble.data.KmfHistoryRepository
 import com.juncehome.lifepo4ble.platform.BlePermissionPolicy
 import com.juncehome.lifepo4ble.ui.BleViewModel
 
@@ -26,6 +29,21 @@ class AppGraph(
 
     private val deviceStore: DeviceStore by lazy {
         DeviceStore(application.deviceDataStore)
+    }
+
+    private val database: KmfDatabase by lazy {
+        Room.databaseBuilder(
+            application,
+            KmfDatabase::class.java,
+            "kmf-history.db",
+        ).build()
+    }
+
+    private val historyRepository by lazy {
+        KmfHistoryRepository(
+            frameEventDao = database.kmfFrameEventDao(),
+            batterySampleDao = database.kmfBatterySampleDao(),
+        )
     }
 
     private val scanner by lazy {
@@ -50,7 +68,7 @@ class AppGraph(
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(BleViewModel::class.java)) {
-                return BleViewModel(repository, deviceStore) as T
+                return BleViewModel(repository, deviceStore, historyRepository) as T
             }
             error("Unknown ViewModel class ${modelClass.name}")
         }
