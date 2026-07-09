@@ -11,9 +11,10 @@
   - `KmfDatabase`, frame/sample entities, DAOs, and `KmfHistoryRepository` are wired.
   - Inbound notifications, outbound write completions, and merged battery samples now persist from the existing BLE/ViewModel path.
   - Theme now defaults to dark mode.
-- Vico, Navigation Compose, dashboard pages, history pages, energy analytics, and diagnostics reshaping are intentionally deferred.
+- Navigation Compose is in place, Dashboard is the start destination, and the old BLE utility screen now lives under Diagnostics.
+- Vico, fuller dashboard cards, history pages, and energy analytics are intentionally deferred.
 - `planning/INDEX.md` should treat this file as the active implementation plan.
-- Continue with Task 6 next: add the navigation shell, make Dashboard the start destination, and move the current debug screen behavior into Diagnostics.
+- Continue with Task 7 next: build the real dashboard cards and empty states.
 
 ## Product Direction
 
@@ -182,7 +183,7 @@ Keeps debug tools:
 - [x] Add Room dependencies.
 - [x] Add KSP if using Room compiler through KSP.
 - [ ] Add Vico Compose and Vico Material3 modules later with chart UI work.
-- [ ] Add Navigation Compose later with dashboard shell work.
+- [x] Add Navigation Compose later with dashboard shell work.
 - [x] Run `./gradlew :app:assembleDebug :app:testDebugUnitTest`.
 
 ### Task 2: Add Database Schema
@@ -222,10 +223,10 @@ Keeps debug tools:
 
 ### Task 6: Add Navigation Shell
 
-- [ ] Add Dashboard, Live, History, Energy, Diagnostics destinations.
-- [ ] Make Dashboard the start destination.
-- [ ] Add Material3 bottom navigation.
-- [ ] Move current debug screen behavior into Diagnostics.
+- [x] Add Dashboard, Live, History, Energy, Diagnostics destinations.
+- [x] Make Dashboard the start destination.
+- [x] Add Material3 bottom navigation.
+- [x] Move current debug screen behavior into Diagnostics.
 
 ### Task 7: Build Dashboard
 

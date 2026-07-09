@@ -24,6 +24,7 @@ import com.juncehome.lifepo4ble.ui.components.StatusPanel
 @Composable
 fun BleScreen(
     state: BleUiState,
+    modifier: Modifier = Modifier,
     onRequestPermissions: () -> Unit,
     onStartScan: () -> Unit,
     onStopScan: () -> Unit,
@@ -32,7 +33,7 @@ fun BleScreen(
     onClearLog: () -> Unit,
 ) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(16.dp),

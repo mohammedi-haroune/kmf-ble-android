@@ -5,9 +5,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.fillMaxSize
-import com.juncehome.lifepo4ble.ui.BleScreen
 import com.juncehome.lifepo4ble.ui.BleUiState
 import com.juncehome.lifepo4ble.ui.BleViewModel
+import com.juncehome.lifepo4ble.ui.KmfBleAppShell
 import com.juncehome.lifepo4ble.ui.theme.KmfBleTheme
 
 @Composable
@@ -21,14 +21,10 @@ fun KmfBleApp(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background,
         ) {
-            BleScreen(
+            KmfBleAppShell(
                 state = state,
+                viewModel = viewModel,
                 onRequestPermissions = onRequestPermissions,
-                onStartScan = viewModel::startScan,
-                onStopScan = viewModel::stopScan,
-                onConnect = viewModel::connect,
-                onDisconnect = viewModel::disconnect,
-                onClearLog = viewModel::clearLog,
             )
         }
     }

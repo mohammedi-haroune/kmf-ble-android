@@ -6,6 +6,8 @@ This repository is currently centered on `planning/INDEX.md`, which points to th
 
 Keep boundaries clear: `platform/` for permission policy, `protocol/` for KMF parsing and packet logging, `ble/` for scanning/GATT/session code, `data/` for DataStore persistence, and `ui/` for ViewModel and Compose screens.
 
+Be brief
+
 ## Build, Test, and Development Commands
 
 POSIX `./gradlew` commands load the repo-level JDK setting from `gradle/jdk.env` when `JAVA_HOME` is not already set: `JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home`.
