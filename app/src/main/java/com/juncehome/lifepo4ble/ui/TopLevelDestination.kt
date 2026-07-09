@@ -9,7 +9,7 @@ enum class TopLevelDestination(
     Live("live", "Live", "L"),
     History("history", "History", "H"),
     Energy("energy", "Energy", "E"),
-    Diagnostics("diagnostics", "Diagnostics", "G"),
+    Diagnostics("diagnostics", "Diagnostic", "G"),
     ;
 
     companion object {

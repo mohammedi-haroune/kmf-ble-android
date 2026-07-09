@@ -9,7 +9,7 @@ plugins {
 
 android {
     namespace = "com.juncehome.lifepo4ble"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.juncehome.lifepo4ble"
