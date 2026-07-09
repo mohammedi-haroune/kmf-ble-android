@@ -83,6 +83,8 @@ class BleRepositoryTest {
 
         override fun write(bytes: ByteArray): Boolean = true
 
+        override fun requestMtu(mtu: Int): Boolean = true
+
         override fun disconnect() = Unit
     }
 

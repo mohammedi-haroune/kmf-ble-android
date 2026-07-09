@@ -33,6 +33,8 @@ interface BleSession {
 
     fun write(bytes: ByteArray): Boolean
 
+    fun requestMtu(mtu: Int): Boolean
+
     fun disconnect()
 }
 
@@ -139,7 +141,6 @@ class AndroidBleSession(
                     activeWriteCharacteristic = writeCharacteristic
                     AppLog.d("Write characteristic ready ${writeCharacteristic.uuid}", TAG)
                     trySend(BleEvent.ServicesDiscovered(profile))
-                    startPolling(gatt, writeCharacteristic, this@callbackFlow, sessionScope)
                 }
             }
 
@@ -159,6 +160,10 @@ class AndroidBleSession(
             ) {
                 AppLog.d("onCharacteristicWrite(uuid=${characteristic.uuid}, status=$status)", TAG)
                 queue.completeCurrent(status == BluetoothGatt.GATT_SUCCESS)
+            }
+
+            override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+                AppLog.d("onMtuChanged(mtu=$mtu, status=$status)", TAG)
             }
 
             @Deprecated("Deprecated in Android 13 but still called on older devices")
@@ -212,24 +217,23 @@ class AndroidBleSession(
         return true
     }
 
+    @SuppressLint("MissingPermission")
+    override fun requestMtu(mtu: Int): Boolean {
+        val gatt = activeGatt ?: return false
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            AppLog.d("requestMtu($mtu)", TAG)
+            gatt.requestMtu(mtu)
+        } else {
+            AppLog.d("requestMtu($mtu) ignored on api=${Build.VERSION.SDK_INT}", TAG)
+            false
+        }
+    }
+
     override fun disconnect() {
         AppLog.d("session.disconnect()", TAG)
         activeScope?.cancel()
         activeGatt?.let { disconnectGatt(it) }
         clearActiveSession()
-    }
-
-    private fun startPolling(
-        gatt: BluetoothGatt,
-        writeCharacteristic: BluetoothGattCharacteristic,
-        events: SendChannel<BleEvent>,
-        scope: CoroutineScope,
-    ): Job = scope.launch {
-        while (isActive) {
-            delay(POLL_INTERVAL_MS)
-            AppLog.d("poll timer fired writing ${KMF_TOTALS_POLL.toHexString()}", TAG)
-            writeGattBytes(gatt, writeCharacteristic, KMF_TOTALS_POLL, events)
-        }
     }
 
     private suspend fun writeGattBytes(
@@ -348,8 +352,6 @@ class AndroidBleSession(
         const val TAG = "KMF-BLE"
         private val CLIENT_CONFIG_DESCRIPTOR_UUID: UUID =
             UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-        private val KMF_TOTALS_POLL = byteArrayOf(0x3A, 0x43, 0x0A)
-        private const val POLL_INTERVAL_MS = 30_000L
     }
 }
 

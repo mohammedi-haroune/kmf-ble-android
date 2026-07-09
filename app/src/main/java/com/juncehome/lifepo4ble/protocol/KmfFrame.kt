@@ -13,6 +13,10 @@ sealed interface KmfFrame {
         val status: String,
     ) : KmfFrame
 
+    data class B(
+        val fields: List<Int>,
+    ) : KmfFrame
+
     data class C(
         val chargeKwh: Double,
         val dischargeKwh: Double,

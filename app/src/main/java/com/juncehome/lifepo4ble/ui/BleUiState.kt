@@ -17,6 +17,8 @@ data class BleUiState(
     val serviceUuid: String? = null,
     val notifyUuid: String? = null,
     val writeUuid: String? = null,
+    val hasAFrame: Boolean = false,
+    val hasBFrame: Boolean = false,
     val latestReading: KmfReading = KmfReading(),
     val packetLog: List<FrameLogEntry> = emptyList(),
     val latestError: String? = null,
@@ -26,4 +28,7 @@ data class BleUiState(
 
     val readyToScan: Boolean
         get() = permissionsGranted && hasBleFeature && hasBluetoothAdapter && bluetoothEnabled
+
+    val kmfBootstrapReady: Boolean
+        get() = hasAFrame && hasBFrame
 }

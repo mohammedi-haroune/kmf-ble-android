@@ -30,4 +30,30 @@ class KmfReadingMergerTest {
         assertEquals(0.012, afterC.chargeKwh, 0.001)
         assertEquals(0.034, afterC.dischargeKwh, 0.001)
     }
+
+    @Test
+    fun reducedAFrameKeepsKnownCapacityAndRecomputesSoc() {
+        val seeded = KmfReading(
+            capacityAh = 120.0,
+            socPercent = 50.0,
+        )
+
+        val merged = KmfReadingMerger.apply(
+            seeded,
+            KmfFrame.A(
+                voltageV = 13.27,
+                currentA = -0.94,
+                powerW = -12.47,
+                charging = false,
+                minutesRemaining = 6666,
+                remainingAh = 104.434,
+                capacityAh = 0.0,
+                socPercent = 0.0,
+                status = "Discharging",
+            ),
+        )
+
+        assertEquals(120.0, merged.capacityAh, 0.001)
+        assertEquals(87.028, merged.socPercent, 0.001)
+    }
 }

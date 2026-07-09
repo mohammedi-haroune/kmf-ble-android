@@ -4,6 +4,7 @@ import com.juncehome.lifepo4ble.AppLog
 import com.juncehome.lifepo4ble.ble.BleEvent
 import com.juncehome.lifepo4ble.protocol.KmfLineParser
 import com.juncehome.lifepo4ble.protocol.KmfReadingMerger
+import com.juncehome.lifepo4ble.protocol.KmfFrame
 import com.juncehome.lifepo4ble.protocol.PacketDirection
 import com.juncehome.lifepo4ble.protocol.PacketFormatter
 
@@ -32,6 +33,9 @@ object BleStateReducer {
                 scanning = false,
                 selectedDevice = event.device,
                 connectionState = ConnectionState.CONNECTING,
+                hasAFrame = false,
+                hasBFrame = false,
+                latestReading = com.juncehome.lifepo4ble.protocol.KmfReading(),
                 latestError = null,
             )
             is BleEvent.Connected -> state.copy(
@@ -61,6 +65,8 @@ object BleStateReducer {
                     TAG,
                 )
                 state.copy(
+                    hasAFrame = state.hasAFrame || frames.any { it is KmfFrame.A },
+                    hasBFrame = state.hasBFrame || frames.any { it is KmfFrame.B },
                     latestReading = reading,
                     packetLog = state.packetLog.plusBounded(
                         PacketFormatter.toEntry(nowMs, PacketDirection.INBOUND, event.bytes)

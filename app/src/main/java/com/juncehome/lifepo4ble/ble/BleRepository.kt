@@ -25,6 +25,8 @@ interface BleRepositoryContract {
 
     fun write(bytes: ByteArray): Boolean
 
+    fun requestMtu(mtu: Int): Boolean
+
     fun disconnect()
 }
 
@@ -87,6 +89,11 @@ class BleRepository(
     override fun write(bytes: ByteArray): Boolean {
         AppLog.d("write(${bytes.size} bytes)", "KMF-BLE")
         return session.write(bytes)
+    }
+
+    override fun requestMtu(mtu: Int): Boolean {
+        AppLog.d("requestMtu($mtu)", "KMF-BLE")
+        return session.requestMtu(mtu)
     }
 
     override fun disconnect() {
