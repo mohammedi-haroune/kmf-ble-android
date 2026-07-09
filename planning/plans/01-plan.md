@@ -20,7 +20,7 @@
 - Task 6 permission fallback decision is complete: keep `android:usesPermissionFlags="neverForLocation"` unchanged because the real meter was discoverable on the validation device.
 - This implementation phase is wrapped up. Continue next only if a new behavior change or product decision is needed.
 
-**Architecture:** The app is a single-activity native Android app. It has four boundaries: Android permission/Bluetooth readiness, BLE transport with a serialized GATT operation queue, KMF protocol parsing based on `kmf.yml`, and ViewModel/Compose UI state. `kmf.yml` is the behavior reference for how to receive and parse KMF BLE data: notify on the data characteristic, buffer text until CR/LF, parse `A=` and `C=` lines, discard oversized fragments, and periodically write `:C\n`; do not copy its MAC address or UUIDs as app constants.
+**Architecture:** The app is a single-activity native Android app. It has four boundaries: Android permission/Bluetooth readiness, BLE transport with a serialized GATT operation queue, KMF protocol parsing based on `planning/resources/kmf.yml`, and ViewModel/Compose UI state. `planning/resources/kmf.yml` is the behavior reference for how to receive and parse KMF BLE data: notify on the data characteristic, buffer text until CR/LF, parse `A=` and `C=` lines, discard oversized fragments, and periodically write `:C\n`; do not copy its MAC address or UUIDs as app constants.
 
 **Tech Stack:** Kotlin, Android Gradle Plugin, Jetpack Compose, Material3, Coroutines, Flow/StateFlow, BluetoothLeScanner/BluetoothGatt, DataStore Preferences, JUnit4, kotlinx-coroutines-test, AndroidX test APIs.
 
@@ -35,7 +35,7 @@
 - BLE only; no MQTT, sockets, Wi-Fi setup, LAN, WAN, or cloud sync.
 - Foreground-only; no background service.
 - No hardcoded KMF MAC address, service UUID, or characteristic UUID in app logic.
-- `kmf.yml` is the authoritative behavior reference for KMF BLE data flow, not an identifier source.
+- `planning/resources/kmf.yml` is the authoritative behavior reference for KMF BLE data flow, not an identifier source.
 - Show selected device, connection state, selected service UUID, notify UUID, write UUID, and live packet log.
 - Log inbound notifications and outbound writes with timestamp, direction, hex, ASCII, and byte length.
 - Persist only last connected device address/name and last successful UUID selection in DataStore.
@@ -47,7 +47,7 @@
 
 ## Source References
 
-- `kmf.yml`
+- `planning/resources/kmf.yml`
   - Uses a BLE client characteristic with `notify: true`.
   - Buffers incoming bytes until `\r` or `\n`.
   - Detects `A=` and `C=` anywhere in the complete text line.
