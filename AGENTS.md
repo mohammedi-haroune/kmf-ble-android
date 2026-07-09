@@ -16,6 +16,7 @@ POSIX `./gradlew` commands load the repo-level JDK setting from `gradle/jdk.env`
 - `./gradlew :app:testDebugUnitTest --tests 'com.juncehome.lifepo4ble.protocol.*'`: runs focused protocol tests.
 - `adb devices`: confirms a device is connected and authorized.
 - `adb install -r app/build/outputs/apk/debug/app-debug.apk`: installs the debug APK after `:app:assembleDebug`.
+- `adb shell am start -n com.juncehome.lifepo4ble/.MainActivity`: launches the installed debug app for end-to-end validation.
 - `adb shell pidof -s com.juncehome.lifepo4ble`: gets the current app PID for log filtering.
 - `adb logcat --pid "$(adb shell pidof -s com.juncehome.lifepo4ble)" -v threadtime`: preferred live app-log stream when the app is running.
 - `adb logcat -d -s KMF-BLE`: preferred buffered app-log dump by app tag when PID filtering is not enough.
@@ -45,19 +46,20 @@ Current repo behavior should match the official Android app's BLE startup sequen
 ## Testing Guidelines
 
 Use JUnit4, `kotlinx-coroutines-test`, and AndroidX test APIs for JVM tests. Name tests `*Test.kt` and place them beside the matching package under `app/src/test/java/`. Prioritize pure Kotlin coverage for permission policy, protocol parsing, packet formatting, profile selection, GATT queue behavior, reducers, and ViewModel state.
-Finish each substantial change with an end-to-end verification pass: build the debug app, install it on a device, launch it, and inspect the app logs (`--pid`, `KMF-BLE`, and `files/kmf-ble.log`) to confirm the app is behaving as expected.
+Treat a USB-connected Android device as part of the default verification path, not an optional extra. For any runnable Android change, finish with an on-device end-to-end pass: run `adb devices`, build the debug app, install it on the connected device, launch it, and inspect the app logs (`--pid`, `KMF-BLE`, and `files/kmf-ble.log`) to confirm the app is behaving as expected. Only skip this when the change is truly non-runnable or the device/ADB path is unavailable, and in that case report the exact blocker explicitly.
 
 For KMF protocol changes, verify both levels:
 
 - JVM tests for parser/reducer/startup-loop behavior.
 - On-device validation that `Capacity Ah` and `SoC` appear without the official app being open at the same time.
+- The full install-launch-log pass on the connected device, with any BLE behavior regression called out explicitly.
 
 ## Commit & Pull Request Guidelines
 
 The plan uses Conventional Commit-style messages, for example `chore: bootstrap native android ble app`, `feat: add kmf protocol parser`, and `docs: document kmf ble validation`. Keep commits scoped to one task or behavior change.
 
 Pull requests should describe the implemented task, list verification commands run, call out BLE device validation results when relevant, and include screenshots for Compose UI changes.
-Include the final install-launch-log verification in the reported validation steps whenever the app is runnable.
+Include the final install-launch-log verification in the reported validation steps whenever the app is runnable. If that device pass was not run, state the exact reason instead of omitting it.
 
 ## Security & Configuration Tips
 
