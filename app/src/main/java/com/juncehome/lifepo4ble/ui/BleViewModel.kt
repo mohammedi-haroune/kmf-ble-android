@@ -8,6 +8,7 @@ import com.juncehome.lifepo4ble.ble.GattProfile
 import com.juncehome.lifepo4ble.ble.ScannedDevice
 import com.juncehome.lifepo4ble.data.DeviceSnapshot
 import com.juncehome.lifepo4ble.data.DeviceSnapshotStore
+import com.juncehome.lifepo4ble.data.KmfBatterySampleEntity
 import com.juncehome.lifepo4ble.data.KmfHistoryStore
 import com.juncehome.lifepo4ble.data.KmfNotificationObservation
 import com.juncehome.lifepo4ble.data.KmfWriteObservation
@@ -16,6 +17,7 @@ import com.juncehome.lifepo4ble.ble.BleEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -35,12 +37,16 @@ class BleViewModel(
     private var bootstrapJob: Job? = null
     private var totalsPollJob: Job? = null
     private var reconnectJob: Job? = null
+    private var recentSamplesJob: Job? = null
+    private var recentSamplesDeviceAddress: String? = null
     private var manualDisconnectRequested = false
     private val workScope: CoroutineScope
         get() = scope ?: viewModelScope
 
     private val mutableUiState = MutableStateFlow(BleUiState())
     val uiState: StateFlow<BleUiState> = mutableUiState
+    private val mutableRecentBatterySamples = MutableStateFlow<List<KmfBatterySampleEntity>>(emptyList())
+    val recentBatterySamples: StateFlow<List<KmfBatterySampleEntity>> = mutableRecentBatterySamples
 
     init {
         workScope.launch {
@@ -49,6 +55,7 @@ class BleViewModel(
                 val nowMs = clock()
                 val nextState = BleStateReducer.reduce(previousState, event, parser, nowMs)
                 mutableUiState.value = nextState
+                syncRecentBatterySamples(nextState.selectedDevice?.address)
                 persistHistory(event, nextState, nowMs)
 
                 if (event is BleEvent.Connecting || event is BleEvent.Connected) {
@@ -231,6 +238,26 @@ class BleViewModel(
         reconnectJob = null
     }
 
+    private fun syncRecentBatterySamples(deviceAddress: String?) {
+        if (recentSamplesDeviceAddress == deviceAddress) {
+            return
+        }
+        recentSamplesDeviceAddress = deviceAddress
+        recentSamplesJob?.cancel()
+        recentSamplesJob = null
+        mutableRecentBatterySamples.value = emptyList()
+
+        if (deviceAddress == null) {
+            return
+        }
+
+        recentSamplesJob = workScope.launch {
+            historyStore.observeRecentBatterySamples(deviceAddress, LIVE_SAMPLE_LIMIT).collectLatest { samples ->
+                mutableRecentBatterySamples.value = samples
+            }
+        }
+    }
+
     private fun shouldAutoReconnect(state: BleUiState): Boolean =
         state.selectedDevice != null && state.connectionState != ConnectionState.DISCONNECTED
 
@@ -310,6 +337,7 @@ class BleViewModel(
         const val BOOTSTRAP_RETRY_DELAY_MS = 2_000L
         const val MAX_BOOTSTRAP_ATTEMPTS = 15
         const val TOTALS_POLL_INTERVAL_MS = 30_000L
+        const val LIVE_SAMPLE_LIMIT = 2_048
         val KMF_BOOTSTRAP_REQUEST = byteArrayOf(0x3A, 0x2A)
         val KMF_TOTALS_POLL = byteArrayOf(0x3A, 0x43, 0x0A)
     }

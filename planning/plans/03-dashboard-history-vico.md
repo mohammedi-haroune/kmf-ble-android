@@ -15,7 +15,8 @@
 - Vico, fuller dashboard cards, history pages, and energy analytics are intentionally deferred.
 - `planning/INDEX.md` should treat this file as the active implementation plan.
 - Dashboard cards and empty states are in place.
-- Continue with Task 8 next: add the Vico live charts.
+- Live charts are in place with a range selector and Vico-backed SoC, power, current, and voltage cards.
+- Continue with Task 9 next: add grouped historical analytics.
 
 ## Product Direction
 
@@ -240,12 +241,12 @@ Keeps debug tools:
 
 ### Task 8: Add Vico Live Charts
 
-- [ ] Add reusable Vico line chart component.
-- [ ] Add range selector.
-- [ ] Add SoC chart.
-- [ ] Add power chart.
-- [ ] Add current chart.
-- [ ] Add voltage chart.
+- [x] Add reusable Vico line chart component.
+- [x] Add range selector.
+- [x] Add SoC chart.
+- [x] Add power chart.
+- [x] Add current chart.
+- [x] Add voltage chart.
 
 ### Task 9: Add Historical Analytics
 

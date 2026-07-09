@@ -16,9 +16,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -243,6 +243,70 @@ class BleViewModelTest {
         }
     }
 
+    @Test
+    fun recentBatterySamplesFollowSelectedDeviceHistory() = runTest {
+        val repo = FakeBleRepository()
+        val store = FakeDeviceStore()
+        val historyStore = FakeHistoryStore()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = BleViewModel(repo, store, historyStore, clock = { 1234L }, scope = viewModelScope)
+        val device = ScannedDevice(
+            name = "KMF",
+            address = "AA:BB:CC:DD:EE:FF",
+            rssi = -55,
+            serviceUuids = emptyList(),
+        )
+
+        try {
+            advanceUntilIdle()
+            repo.events.emit(BleEvent.Connecting(device))
+            historyStore.emitRecentBatterySamples(
+                device.address,
+                listOf(
+                    batterySample(id = 2, timestampMs = 20L),
+                    batterySample(id = 1, timestampMs = 10L),
+                )
+            )
+            advanceUntilIdle()
+
+            assertEquals(2, viewModel.recentBatterySamples.value.size)
+            assertEquals(20L, viewModel.recentBatterySamples.value.first().timestampMs)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    private fun batterySample(
+        id: Long,
+        timestampMs: Long,
+    ): KmfBatterySampleEntity =
+        KmfBatterySampleEntity(
+            id = id,
+            timestampMs = timestampMs,
+            deviceAddress = "AA:BB:CC:DD:EE:FF",
+            deviceName = "KMF",
+            voltageV = 13.26,
+            currentA = 1.08,
+            powerW = 14.32,
+            charging = true,
+            minutesRemaining = 95,
+            remainingAh = 57.93,
+            capacityAh = 100.0,
+            socPercent = 57.9,
+            chargeKwh = 12.34,
+            dischargeKwh = 7.89,
+            hasAFrame = true,
+            hasBFrame = true,
+            hasCFrame = true,
+            rawAFieldsCsv = null,
+            rawBFieldsCsv = null,
+            rawCFieldsCsv = null,
+            connectionState = "READY",
+            serviceUuid = null,
+            notifyUuid = null,
+            writeUuid = null,
+        )
+
     private class FakeBleRepository : BleRepositoryContract {
         override val events: MutableSharedFlow<BleEvent> = MutableSharedFlow(extraBufferCapacity = 300)
         val connectCalls = mutableListOf<Pair<ScannedDevice, DeviceSnapshot?>>()
@@ -286,6 +350,8 @@ class BleViewModelTest {
         val resetSessions = mutableListOf<String>()
         val notifications = mutableListOf<KmfNotificationObservation>()
         val writes = mutableListOf<KmfWriteObservation>()
+        private val recentBatterySamplesByDevice =
+            mutableMapOf<String, MutableStateFlow<List<KmfBatterySampleEntity>>>()
 
         override suspend fun resetSession(deviceAddress: String) {
             resetSessions += deviceAddress
@@ -305,11 +371,19 @@ class BleViewModelTest {
         override fun observeRecentBatterySamples(
             deviceAddress: String,
             limit: Int,
-        ): Flow<List<KmfBatterySampleEntity>> = emptyFlow()
+        ): Flow<List<KmfBatterySampleEntity>> =
+            recentBatterySamplesByDevice.getOrPut(deviceAddress) { MutableStateFlow(emptyList()) }
 
         override fun observeRecentFrameEvents(
             deviceAddress: String,
             limit: Int,
         ): Flow<List<KmfFrameEventEntity>> = emptyFlow()
+
+        fun emitRecentBatterySamples(
+            deviceAddress: String,
+            samples: List<KmfBatterySampleEntity>,
+        ) {
+            recentBatterySamplesByDevice.getOrPut(deviceAddress) { MutableStateFlow(emptyList()) }.value = samples
+        }
     }
 }

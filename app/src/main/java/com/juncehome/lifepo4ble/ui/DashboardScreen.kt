@@ -412,7 +412,7 @@ private fun DashboardEmptyStateCard(
 private fun List<FrameLogEntry>.latestInboundEntry(): FrameLogEntry? =
     asReversed().firstOrNull { entry -> entry.direction == PacketDirection.INBOUND }
 
-private fun ConnectionState.toDisplayLabel(): String =
+fun ConnectionState.toDisplayLabel(): String =
     name.lowercase().replaceFirstChar { character ->
         character.titlecase(Locale.US)
     }
@@ -425,11 +425,11 @@ private fun BleUiState.bootstrapStatusLabel(): String =
         else -> "Waiting"
     }
 
-private fun String?.orDashboardDeviceName(): String = this ?: "Unnamed KMF meter"
+fun String?.orDashboardDeviceName(): String = this ?: "Unnamed KMF meter"
 
-private fun Double.toPercentText(): String = String.format(Locale.US, "%.0f%%", this)
+fun Double.toPercentText(): String = String.format(Locale.US, "%.0f%%", this)
 
-private fun Double.toUnitText(unit: String): String = String.format(Locale.US, "%.2f %s", this, unit)
+fun Double.toUnitText(unit: String): String = String.format(Locale.US, "%.2f %s", this, unit)
 
 private fun Double.toKwhText(): String = String.format(Locale.US, "%.2f kWh", this)
 

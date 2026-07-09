@@ -15,6 +15,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -31,6 +32,7 @@ fun KmfBleAppShell(
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination
+    val recentBatterySamples by viewModel.recentBatterySamples.collectAsStateWithLifecycle()
 
     Scaffold(
         bottomBar = {
@@ -75,9 +77,9 @@ fun KmfBleAppShell(
                 )
             }
             composable(TopLevelDestination.Live.route) {
-                PlaceholderScreen(
-                    title = "Live",
-                    description = "Realtime Vico charts land in the next task.",
+                LiveScreen(
+                    state = state,
+                    samples = recentBatterySamples,
                     contentPadding = innerPadding,
                 )
             }
