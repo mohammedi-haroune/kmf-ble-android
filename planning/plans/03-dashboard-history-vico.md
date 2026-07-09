@@ -11,7 +11,7 @@
   - `KmfDatabase`, frame/sample entities, DAOs, and `KmfHistoryRepository` are wired.
   - Inbound notifications, outbound write completions, and merged battery samples now persist from the existing BLE/ViewModel path.
   - Theme now defaults to dark mode.
-- Navigation Compose is in place, Dashboard is the start destination, and the old BLE utility screen now lives under Diagnostics.
+- Navigation Compose is in place, Dashboard is the start destination, and the old BLE utility screen now lives under Diagnostic.
 - Vico, fuller dashboard cards, history pages, and energy analytics are intentionally deferred.
 - `planning/INDEX.md` should treat this file as the active implementation plan.
 - Dashboard cards and empty states are in place.
@@ -23,7 +23,7 @@
 - Persist every useful observation gathered from the KMF meter while the app is running and connected.
 - Store raw BLE/frame evidence and merged battery-state samples.
 - Open on a dark-mode dashboard showing the current battery state.
-- Add pages for realtime charts, historical analytics, energy totals, and diagnostics.
+- Add pages for realtime charts, historical analytics, energy totals, and diagnostic.
 - Use Vico for charts.
 - Keep the app native Kotlin + Jetpack Compose.
 - Do not rewrite to Flutter in this phase.
@@ -44,7 +44,7 @@ Use:
 - Room over SQLite for KMF history.
 - DataStore for last device/profile and future preferences.
 - Vico for charts.
-- Navigation Compose for Dashboard / Live / History / Energy / Diagnostics.
+- Navigation Compose for Dashboard / Live / History / Energy / Diagnostic.
 - Existing BLE, protocol, and reducer layers without transport rewrites.
 
 ## Data Model
@@ -166,7 +166,7 @@ Shows:
 - charged/discharged delta by bucket
 - daily/hourly energy flow
 
-### Diagnostics
+### Diagnostic
 
 Keeps debug tools:
 
@@ -225,10 +225,10 @@ Keeps debug tools:
 
 ### Task 6: Add Navigation Shell
 
-- [x] Add Dashboard, Live, History, Energy, Diagnostics destinations.
+- [x] Add Dashboard, Live, History, Energy, Diagnostic destinations.
 - [x] Make Dashboard the start destination.
 - [x] Add Material3 bottom navigation.
-- [x] Move current debug screen behavior into Diagnostics.
+- [x] Move current debug screen behavior into Diagnostic.
 
 ### Task 7: Build Dashboard
 
@@ -262,9 +262,9 @@ Keeps debug tools:
 - [ ] Use bar charts for grouped deltas.
 - [ ] Handle meter total resets safely.
 
-### Task 11: Diagnostics
+### Task 11: Diagnostic
 
-- [ ] Move packet log to Diagnostics.
+- [ ] Move packet log to Diagnostic.
 - [ ] Show latest raw A/B/C fields.
 - [ ] Show UUIDs and bootstrap readiness.
 - [ ] Show database row counts.

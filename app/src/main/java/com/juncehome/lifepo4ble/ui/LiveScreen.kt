@@ -261,7 +261,7 @@ private fun LiveEmptyStateCard(
     when (emptyState) {
         LiveEmptyState.NoDevice -> {
             title = "No meter selected"
-            body = "Open Diagnostics to scan and connect before live charts can render."
+            body = "Open Diagnostic to scan and connect before live charts can render."
         }
         LiveEmptyState.NoSamples -> {
             title = "No persisted samples yet"

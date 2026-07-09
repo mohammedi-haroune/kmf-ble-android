@@ -97,7 +97,7 @@ fun KmfBleAppShell(
                     contentPadding = innerPadding,
                 )
             }
-            composable(TopLevelDestination.Diagnostics.route) {
+            composable(TopLevelDestination.Diagnostic.route) {
                 BleScreen(
                     state = state,
                     modifier = Modifier.padding(innerPadding),

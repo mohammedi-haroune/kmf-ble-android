@@ -126,7 +126,7 @@ Non-negotiable sequence:
 - [ ] Determine whether field 6 is threshold/alarm related and list each extracted subfield.
 - [ ] Determine whether field 7 is calibration/offset related and list each extracted subfield.
 - [ ] Determine whether field 8 is used anywhere meaningful or only stored/pass-through.
-- [ ] Decide which decoded values belong in the native app v1 UI, which belong only in diagnostics, and which should stay raw for now.
+- [ ] Decide which decoded values belong in the native app v1 UI, which belong only in diagnostic, and which should stay raw for now.
 - [ ] Add parser/model tests for any newly confirmed semantics.
 - [ ] Validate on device that newly surfaced values remain stable without the official app open simultaneously.
 
@@ -144,7 +144,7 @@ Use this table format during the next pass:
 
 - Do not replace the established core scaling for fields 0 through 5.
 - Do not expose guessed meanings as normal user-facing values.
-- If a field is still ambiguous, expose it only as a raw packed value in diagnostics or logs.
+- If a field is still ambiguous, expose it only as a raw packed value in diagnostic or logs.
 - Keep implementation above the raw GATT layer; this is protocol decoding work, not transport work.
 - Update tests before or with implementation.
 

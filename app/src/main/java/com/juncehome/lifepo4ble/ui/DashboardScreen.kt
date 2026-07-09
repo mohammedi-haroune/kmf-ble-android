@@ -368,7 +368,7 @@ private fun DashboardEmptyStateCard(
     when (emptyState) {
         DashboardEmptyState.NoDevice -> {
             title = "No meter selected"
-            body = "Open Diagnostics to scan and connect before the dashboard can show live battery state."
+            body = "Open Diagnostic to scan and connect before the dashboard can show live battery state."
         }
         DashboardEmptyState.NoData -> {
             title = "Waiting for battery frames"
@@ -376,7 +376,7 @@ private fun DashboardEmptyStateCard(
         }
         DashboardEmptyState.Disconnected -> {
             title = "Meter disconnected"
-            body = "Reconnect in Diagnostics to resume live readings and energy totals."
+            body = "Reconnect in Diagnostic to resume live readings and energy totals."
         }
     }
 

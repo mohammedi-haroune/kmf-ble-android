@@ -12,7 +12,7 @@ class TopLevelDestinationTest {
                 TopLevelDestination.Live,
                 TopLevelDestination.History,
                 TopLevelDestination.Energy,
-                TopLevelDestination.Diagnostics,
+                TopLevelDestination.Diagnostic,
             ),
             TopLevelDestination.bottomBarItems,
         )
