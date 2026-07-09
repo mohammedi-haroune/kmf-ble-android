@@ -1,6 +1,7 @@
 package com.juncehome.lifepo4ble.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -35,8 +36,11 @@ fun KmfBleAppShell(
     val recentBatterySamples by viewModel.recentBatterySamples.collectAsStateWithLifecycle()
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            NavigationBar {
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surface,
+            ) {
                 TopLevelDestination.bottomBarItems.forEach { destination ->
                     NavigationBarItem(
                         selected = currentDestination
@@ -122,6 +126,7 @@ private fun PlaceholderScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
             .padding(contentPadding)
             .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),

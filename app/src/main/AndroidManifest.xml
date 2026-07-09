@@ -24,7 +24,7 @@
         android:allowBackup="false"
         android:label="KMF BLE"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@style/Theme.KmfBle">
         <activity
             android:name=".MainActivity"
             android:exported="true">
