@@ -47,6 +47,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToLong
 
 @Composable
@@ -211,7 +212,7 @@ fun buildLiveContent(
                 unit = "W",
                 firstTimestampMs = firstTimestampMs,
                 selector = { sample -> sample.entity.powerW },
-                formatter = { value -> value.toUnitText("W") },
+                formatter = { value -> value.toLivePowerText() },
             ),
             groupedSamples.toChart(
                 title = "Current",
@@ -394,8 +395,11 @@ private fun LiveLineChart(
     )
     val startAxisValueFormatter = remember(chart.unit) {
         CartesianValueFormatter { _, value, _ ->
+            // Power uses the same tiered rounding as the web liveline spike and the chart headline.
             if (chart.unit == "%") {
                 String.format(Locale.US, "%.0f%%", value)
+            } else if (chart.unit == "W") {
+                value.toLivePowerText()
             } else {
                 String.format(Locale.US, "%.1f %s", value, chart.unit)
             }
@@ -538,6 +542,20 @@ fun formatLiveXAxisLabel(value: Double, firstTimestampMs: Long): String =
         Instant.ofEpochMilli(firstTimestampMs + (value * 1_000.0).roundToLong())
             .atZone(ZoneId.systemDefault())
     )
+
+fun Double.toLivePowerText(): String {
+    if (!isFinite()) {
+        return "-- W"
+    }
+
+    // Keep small power readings stable while still showing coarse values at higher load.
+    val decimals = when {
+        abs(this) <= 5.0 -> 2
+        abs(this) <= 20.0 -> 1
+        else -> 0
+    }
+    return String.format(Locale.US, "%.${decimals}f W", this)
+}
 
 private fun Long.toLiveTimestampText(): String =
     "Last update: " + LIVE_TIME_FORMATTER.format(

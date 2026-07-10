@@ -11,11 +11,17 @@ function formatWatts(value) {
   if (!Number.isFinite(value)) {
     return '-- W'
   }
-  const rounded = Math.abs(value) >= 10 ? value.toFixed(1) : value.toFixed(2)
-  return `${Number(rounded).toLocaleString(undefined, { maximumFractionDigits: 2 })} W`
+  const magnitude = Math.abs(value)
+  const decimals = magnitude <= 5 ? 2 : magnitude <= 20 ? 1 : 0
+  return `${value.toLocaleString(undefined, {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  })} W`
 }
 
 function postEvent(kind, payload) {
+  // Bridge timing events back to Android so we can log page-ready, payload-received,
+  // and first-frame latency from the device side.
   window.KmfLivelineBridge?.onChartEvent?.(
     kind,
     payload.nativeSentAtMs ?? 0,
@@ -76,6 +82,7 @@ export function App() {
 
       <section className="chart-shell" aria-label="Power chart">
         <div className="chart-frame">
+          {/* Keep the live series readable at low power by using a slightly thicker stroke. */}
           <Liveline
             data={chartData}
             value={payload.latestValue}
@@ -84,8 +91,11 @@ export function App() {
             window={60}
             showValue={true}
             valueMomentumColor={true}
+            exaggerate={true}
             windows={[{ label: '60s', secs: 60 }]}
             windowStyle="text"
+            fill={false}
+            lineWidth={3}
             formatValue={formatWatts}
           />
         </div>

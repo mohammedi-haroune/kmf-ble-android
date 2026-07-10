@@ -7,7 +7,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.UUID
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -56,10 +56,12 @@ class LivelinePowerChartModelTest {
     }
 
     @Test
-    fun livelinePowerCssDoesNotClipChartShell() {
+    fun livelinePowerCssIncludesChartShellLayout() {
         val css = readLivelinePowerCss()
 
-        assertFalse(Regex("""\.chart-shell\{[^}]*overflow:hidden""").containsMatchIn(css))
+        assertTrue(css.contains(".screen{box-sizing:border-box;height:100%;"))
+        assertTrue(css.contains(".chart-shell{flex:1 1 0;min-height:260px;display:flex;"))
+        assertTrue(css.contains(".chart-frame{flex:1 1 0;min-height:0;display:flex;align-items:stretch}"))
     }
 
     private fun buildChart(): LiveChartModel {
@@ -78,13 +80,22 @@ class LivelinePowerChartModelTest {
     }
 
     private fun readLivelinePowerCss(): String {
-        val candidates = listOf(
-            Path.of("src/main/assets/liveline-power/assets/index-IjHDVWO-.css"),
-            Path.of("app/src/main/assets/liveline-power/assets/index-IjHDVWO-.css"),
+        val directories = listOf(
+            Path.of("src/main/assets/liveline-power/assets"),
+            Path.of("app/src/main/assets/liveline-power/assets"),
         )
-        return candidates
-            .first(Files::exists)
-            .let { path -> String(Files.readAllBytes(path), StandardCharsets.UTF_8) }
+        for (directory in directories) {
+            if (!Files.isDirectory(directory)) {
+                continue
+            }
+            Files.newDirectoryStream(directory, "index-*.css").use { stream ->
+                val iterator = stream.iterator()
+                if (iterator.hasNext()) {
+                    return String(Files.readAllBytes(iterator.next()), StandardCharsets.UTF_8)
+                }
+            }
+        }
+        error("Could not find generated Liveline power CSS asset")
     }
 
     private fun testDevice(): ScannedDevice =

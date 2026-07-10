@@ -171,6 +171,18 @@ class LiveContentTest {
     }
 
     @Test
+    fun powerValuesUseTieredRoundingForLiveCharts() {
+        assertEquals("0.12 W", 0.123.toLivePowerText())
+        assertEquals("5.00 W", 5.0.toLivePowerText())
+        assertEquals("5.0 W", 5.01.toLivePowerText())
+        assertEquals("12.3 W", 12.34.toLivePowerText())
+        assertEquals("20.0 W", 20.0.toLivePowerText())
+        assertEquals("21 W", 20.6.toLivePowerText())
+        assertEquals("-14.3 W", (-14.32).toLivePowerText())
+        assertEquals("-- W", Double.NaN.toLivePowerText())
+    }
+
+    @Test
     fun emptyRangeShowsNoSamplesState() {
         val content = buildLiveContent(
             state = BleUiState(

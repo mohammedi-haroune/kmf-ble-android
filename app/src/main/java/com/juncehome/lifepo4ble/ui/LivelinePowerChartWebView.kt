@@ -25,8 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewAssetLoader
-import kotlin.math.max
-
+impo
 private const val LIVELINE_WEB_TAG = "KMF-LIVELINE"
 private const val LIVELINE_ASSET_URL = "https://appassets.androidplatform.net/assets/liveline-power/index.html"
 
@@ -49,10 +48,12 @@ fun LivelinePowerChartWebView(
             createLivelineWebView(
                 context = context,
                 onPageReady = {
+                    // WebView is ready to accept the payload once the React app installs its bridge.
                     Log.d(LIVELINE_WEB_TAG, "web page ready")
                     pageReady = true
                 },
                 onBridgeEvent = { kind, nativeSentAtMs, jsEpochMs ->
+                    // These events measure the delay between Android sending data and the canvas updating.
                     val latencyMs = if (nativeSentAtMs > 0L) {
                         max(0L, jsEpochMs.toLong() - nativeSentAtMs)
                     } else {
@@ -89,6 +90,7 @@ fun LivelinePowerChartWebView(
             return@LaunchedEffect
         }
         val script = "window.kmfPowerChart && window.kmfPowerChart.update($payloadJson);"
+        // Send the current chart snapshot only after the page has registered the JS bridge.
         Log.d(LIVELINE_WEB_TAG, "send payload nativeSentAtMs=${payload.nativeSentAtMs} points=${payload.points.size}")
         view.evaluateJavascript(script, null)
         if (!layoutLogged) {
