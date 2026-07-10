@@ -25,7 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewAssetLoader
-impo
+import kotlin.math.max
 private const val LIVELINE_WEB_TAG = "KMF-LIVELINE"
 private const val LIVELINE_ASSET_URL = "https://appassets.androidplatform.net/assets/liveline-power/index.html"
 

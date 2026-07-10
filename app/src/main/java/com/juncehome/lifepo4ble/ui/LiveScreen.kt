@@ -48,6 +48,8 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.pow
+import kotlin.math.round
 import kotlin.math.roundToLong
 
 @Composable
@@ -471,11 +473,12 @@ private fun List<LiveSecondSample>.toChart(
     val points = map { sample ->
         val bucketTimestampMs = sample.bucketSecond * 1_000L
         val elapsedMs = bucketTimestampMs - firstTimestampMs
+        val y = selector(sample)
         LiveChartPoint(
             timestampMs = sample.entity.timestampMs,
             xSeconds = (elapsedMs / 1_000.0).roundToChartPrecision(),
             xMinutes = (elapsedMs / 60_000.0).roundToChartPrecision(),
-            y = selector(sample),
+            y = if (unit == "W") y.roundToLivePowerChartValue() else y,
         )
     }
     val latestXSeconds = points.last().xSeconds
@@ -555,6 +558,20 @@ fun Double.toLivePowerText(): String {
         else -> 0
     }
     return String.format(Locale.US, "%.${decimals}f W", this)
+}
+
+private fun Double.roundToLivePowerChartValue(): Double {
+    if (!isFinite()) {
+        return this
+    }
+
+    val decimals = when {
+        abs(this) <= 5.0 -> 2
+        abs(this) <= 20.0 -> 1
+        else -> 0
+    }
+    val scale = 10.0.pow(decimals)
+    return round(this * scale) / scale
 }
 
 private fun Long.toLiveTimestampText(): String =
