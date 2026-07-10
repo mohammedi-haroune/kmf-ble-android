@@ -38,6 +38,15 @@ Build the debug APK:
 ./gradlew :app:assembleDebug
 ```
 
+Or use the root `Makefile`:
+
+```bash
+make build
+make install
+make run
+make live
+```
+
 Run JVM unit tests:
 
 ```bash
