@@ -6,3 +6,4 @@ local.properties
 *.iml
 db.db
 db.db-*
+web/liveline-power-spike/node_modules

@@ -88,6 +88,12 @@ fun LiveScreen(
                 chart = chart,
                 range = selectedRange,
             )
+            if (chart.title == "Power") {
+                LivelinePowerExperimentCard(
+                    chart = chart,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
     }
 }
@@ -347,6 +353,28 @@ private fun LiveChartCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(220.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun LivelinePowerExperimentCard(
+    chart: LiveChartModel,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+        ),
+    ) {
+        Column {
+            LivelinePowerChartWebView(
+                chart = chart,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(420.dp),
             )
         }
     }

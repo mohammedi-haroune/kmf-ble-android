@@ -48,7 +48,7 @@ Current repo behavior should match the official Android app's BLE startup sequen
 ## Testing Guidelines
 
 Use JUnit4, `kotlinx-coroutines-test`, and AndroidX test APIs for JVM tests. Name tests `*Test.kt` and place them beside the matching package under `app/src/test/java/`. Prioritize pure Kotlin coverage for permission policy, protocol parsing, packet formatting, profile selection, GATT queue behavior, reducers, and ViewModel state.
-Treat a USB-connected Android device as part of the default verification path, not an optional extra. For any runnable Android change, finish with an on-device end-to-end pass: run `adb devices`, build the debug app, install it on the connected device, launch it, and inspect the app logs (`--pid`, `KMF-BLE`, and `files/kmf-ble.log`) to confirm the app is behaving as expected. Only skip this when the change is truly non-runnable or the device/ADB path is unavailable, and in that case report the exact blocker explicitly.
+Treat a USB-connected Android device as part of the default verification path, not an optional extra. For any runnable Android change, finish with an on-device end-to-end pass: run `adb devices`, build the debug app, install it on the connected device, launch it, and inspect the app logs (`--pid`, `KMF-BLE`, and `files/kmf-ble.log`) to confirm the app is behaving as expected. If no device is connected and authorized, stop and ask the user to plug it in. If the connected device is locked, stop and ask the user to unlock it before continuing. Do not skip this pass unless the user explicitly asks to skip it.
 
 For KMF protocol changes, verify both levels:
 
