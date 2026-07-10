@@ -27,16 +27,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.juncehome.lifepo4ble.data.KmfBatterySampleEntity
+import com.patrykandpatrick.vico.compose.cartesian.AutoScrollCondition
 import com.patrykandpatrick.vico.compose.cartesian.CartesianChartHost
+import com.patrykandpatrick.vico.compose.cartesian.Scroll
 import com.patrykandpatrick.vico.compose.cartesian.axis.HorizontalAxis
 import com.patrykandpatrick.vico.compose.cartesian.axis.VerticalAxis
 import com.patrykandpatrick.vico.compose.cartesian.layer.rememberLineCartesianLayer
 import com.patrykandpatrick.vico.compose.cartesian.rememberCartesianChart
+import com.patrykandpatrick.vico.compose.cartesian.rememberVicoScrollState
 import com.patrykandpatrick.vico.compose.common.ProvideVicoTheme
 import com.patrykandpatrick.vico.compose.m3.common.rememberM3VicoTheme
 import com.patrykandpatrick.vico.compose.cartesian.data.CartesianChartModelProducer
+import com.patrykandpatrick.vico.compose.cartesian.data.CartesianLayerRangeProvider
 import com.patrykandpatrick.vico.compose.cartesian.data.CartesianValueFormatter
 import com.patrykandpatrick.vico.compose.cartesian.data.lineModel
+import com.patrykandpatrick.vico.compose.common.data.ExtraStore
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
@@ -114,10 +119,23 @@ data class LiveChartModel(
     val unit: String,
     val latestValue: String,
     val points: List<LiveChartPoint>,
+    val latestXSeconds: Double,
+    val visibleXMinSeconds: Double,
+    val visibleXMaxSeconds: Double,
+    val renderedXMinSeconds: Double,
+    val renderedXMaxSeconds: Double,
 )
 
 data class LiveChartPoint(
+    val timestampMs: Long,
+    val xSeconds: Double,
     val xMinutes: Double,
+    val y: Double,
+)
+
+data class RenderedLiveChartPoint(
+    val timestampMs: Long,
+    val xSeconds: Double,
     val y: Double,
 )
 
@@ -167,39 +185,40 @@ fun buildLiveContent(
         )
     }
 
-    val firstTimestampMs = rangeSamples.first().timestampMs
+    val groupedSamples = rangeSamples.groupToLatestSamplePerSecond()
+    val firstTimestampMs = groupedSamples.first().bucketSecond * 1_000L
     return LiveContent(
         deviceName = selectedDevice.name.orDashboardDeviceName(),
         connectionLabel = state.connectionState.toDisplayLabel(),
         lastUpdatedTimestampMs = newestTimestampMs,
         emptyState = null,
         charts = listOf(
-            rangeSamples.toChart(
+            groupedSamples.toChart(
                 title = "State of charge",
                 unit = "%",
                 firstTimestampMs = firstTimestampMs,
-                selector = KmfBatterySampleEntity::socPercent,
+                selector = { sample -> sample.entity.socPercent },
                 formatter = Double::toPercentText,
             ),
-            rangeSamples.toChart(
+            groupedSamples.toChart(
                 title = "Power",
                 unit = "W",
                 firstTimestampMs = firstTimestampMs,
-                selector = KmfBatterySampleEntity::powerW,
+                selector = { sample -> sample.entity.powerW },
                 formatter = { value -> value.toUnitText("W") },
             ),
-            rangeSamples.toChart(
+            groupedSamples.toChart(
                 title = "Current",
                 unit = "A",
                 firstTimestampMs = firstTimestampMs,
-                selector = KmfBatterySampleEntity::currentA,
+                selector = { sample -> sample.entity.currentA },
                 formatter = { value -> value.toUnitText("A") },
             ),
-            rangeSamples.toChart(
+            groupedSamples.toChart(
                 title = "Voltage",
                 unit = "V",
                 firstTimestampMs = firstTimestampMs,
-                selector = KmfBatterySampleEntity::voltageV,
+                selector = { sample -> sample.entity.voltageV },
                 formatter = { value -> value.toUnitText("V") },
             ),
         ),
@@ -340,6 +359,11 @@ private fun LiveLineChart(
     modifier: Modifier = Modifier,
 ) {
     val modelProducer = remember { CartesianChartModelProducer() }
+    val scrollState = rememberVicoScrollState(
+        initialScroll = Scroll.Absolute.End,
+        autoScroll = Scroll.Absolute.End,
+        autoScrollCondition = AutoScrollCondition.OnModelGrowth,
+    )
     val startAxisValueFormatter = remember(chart.unit) {
         CartesianValueFormatter { _, value, _ ->
             if (chart.unit == "%") {
@@ -349,18 +373,27 @@ private fun LiveLineChart(
             }
         }
     }
-    val bottomAxisValueFormatter = remember(range) {
+    val axisStartTimestampMs = chart.axisStartTimestampMs()
+    val bottomAxisValueFormatter = remember(axisStartTimestampMs) {
         CartesianValueFormatter { _, value, _ ->
-            value.toMinuteLabel(range)
+            if (axisStartTimestampMs == null) {
+                ""
+            } else {
+                formatLiveXAxisLabel(value = value, firstTimestampMs = axisStartTimestampMs)
+            }
         }
     }
+    val renderedPoints = chart.renderedPoints()
+    val xRangeProvider = remember { LiveXAxisRangeProvider() }
+    xRangeProvider.minX = chart.renderedXMinSeconds
+    xRangeProvider.maxX = chart.renderedXMaxSeconds
 
-    LaunchedEffect(chart.points) {
+    LaunchedEffect(renderedPoints) {
         modelProducer.runTransaction {
             lineModel {
                 series(
-                    chart.points.map { point -> point.xMinutes },
-                    chart.points.map { point -> point.y },
+                    renderedPoints.map { point -> point.xSeconds },
+                    renderedPoints.map { point -> point.y },
                 )
             }
         }
@@ -369,46 +402,114 @@ private fun LiveLineChart(
     ProvideVicoTheme(rememberM3VicoTheme()) {
         CartesianChartHost(
             rememberCartesianChart(
-                rememberLineCartesianLayer(),
+                rememberLineCartesianLayer(rangeProvider = xRangeProvider),
                 startAxis = VerticalAxis.rememberStart(valueFormatter = startAxisValueFormatter),
                 bottomAxis = HorizontalAxis.rememberBottom(valueFormatter = bottomAxisValueFormatter),
             ),
             modelProducer,
             modifier = modifier,
+            scrollState = scrollState,
         )
     }
 }
 
-private fun List<KmfBatterySampleEntity>.toChart(
+private data class LiveSecondSample(
+    val bucketSecond: Long,
+    val entity: KmfBatterySampleEntity,
+)
+
+private fun List<KmfBatterySampleEntity>.groupToLatestSamplePerSecond(): List<LiveSecondSample> =
+    asSequence()
+        .groupBy { sample -> sample.timestampMs / 1_000L }
+        .map { (bucketSecond, bucketSamples) ->
+            LiveSecondSample(
+                bucketSecond = bucketSecond,
+                entity = bucketSamples.maxBy { sample -> sample.timestampMs },
+            )
+        }
+        .sortedBy { sample -> sample.bucketSecond }
+
+private fun List<LiveSecondSample>.toChart(
     title: String,
     unit: String,
     firstTimestampMs: Long,
-    selector: (KmfBatterySampleEntity) -> Double,
+    selector: (LiveSecondSample) -> Double,
     formatter: (Double) -> String,
 ): LiveChartModel {
     val points = map { sample ->
+        val bucketTimestampMs = sample.bucketSecond * 1_000L
+        val elapsedMs = bucketTimestampMs - firstTimestampMs
         LiveChartPoint(
-            xMinutes = ((sample.timestampMs - firstTimestampMs) / 60_000.0).roundToChartPrecision(),
+            timestampMs = sample.entity.timestampMs,
+            xSeconds = (elapsedMs / 1_000.0).roundToChartPrecision(),
+            xMinutes = (elapsedMs / 60_000.0).roundToChartPrecision(),
             y = selector(sample),
         )
     }
+    val latestXSeconds = points.last().xSeconds
+    val visibleXMinSeconds = (
+        latestXSeconds - (LIVE_VISIBLE_WINDOW_SECONDS - LIVE_RIGHT_PADDING_SECONDS)
+    ).coerceAtLeast(0.0)
     return LiveChartModel(
         title = title,
         unit = unit,
         latestValue = formatter(selector(last())),
         points = points,
+        latestXSeconds = latestXSeconds,
+        visibleXMinSeconds = visibleXMinSeconds,
+        visibleXMaxSeconds = latestXSeconds,
+        renderedXMinSeconds = 0.0,
+        renderedXMaxSeconds = LIVE_VISIBLE_WINDOW_SECONDS,
     )
 }
 
-private fun Double.toMinuteLabel(range: LiveRange): String {
-    val durationMs = (this * 60_000.0).roundToLong()
-    val minutes = durationMs / 60_000L
-    return when {
-        range == LiveRange.OneHour -> String.format(Locale.US, "%dm", minutes)
-        durationMs < 60_000L -> "${durationMs / 1_000L}s"
-        else -> String.format(Locale.US, "%dm", minutes)
+fun LiveChartModel.visiblePoints(): List<LiveChartPoint> =
+    points.filter { point ->
+        point.xSeconds >= visibleXMinSeconds && point.xSeconds <= visibleXMaxSeconds
     }
+
+fun LiveChartModel.renderedPoints(): List<RenderedLiveChartPoint> =
+    visiblePoints().map { point ->
+        RenderedLiveChartPoint(
+            timestampMs = point.timestampMs,
+            xSeconds = (point.xSeconds - visibleXMinSeconds).roundToChartPrecision(),
+            y = point.y,
+        )
+    }.withFutureHoldPoint(renderedXMaxSeconds)
+
+private fun List<RenderedLiveChartPoint>.withFutureHoldPoint(
+    renderedXMaxSeconds: Double,
+): List<RenderedLiveChartPoint> {
+    val latest = lastOrNull() ?: return this
+    if (latest.xSeconds >= renderedXMaxSeconds) {
+        return this
+    }
+    val holdPoint = latest.copy(
+        timestampMs = latest.timestampMs + ((renderedXMaxSeconds - latest.xSeconds) * 1_000.0).roundToLong(),
+        xSeconds = renderedXMaxSeconds,
+    )
+    return this + holdPoint
 }
+
+private fun LiveChartModel.axisStartTimestampMs(): Long? {
+    val firstTimestampMs = points.firstOrNull()?.timestampMs ?: return null
+    return firstTimestampMs + (visibleXMinSeconds * 1_000.0).roundToLong()
+}
+
+private class LiveXAxisRangeProvider : CartesianLayerRangeProvider {
+    var minX: Double = 0.0
+    var maxX: Double = LIVE_VISIBLE_WINDOW_SECONDS
+
+    override fun getMinX(minX: Double, maxX: Double, extraStore: ExtraStore): Double = this.minX
+
+    override fun getMaxX(minX: Double, maxX: Double, extraStore: ExtraStore): Double = this.maxX
+}
+
+fun formatLiveXAxisLabel(value: Double, firstTimestampMs: Long): String =
+    LIVE_TIME_FORMATTER.format(
+        Instant.ofEpochMilli(firstTimestampMs + (value * 1_000.0).roundToLong())
+            .atZone(ZoneId.systemDefault())
+    )
 
 private fun Long.toLiveTimestampText(): String =
     "Last update: " + LIVE_TIME_FORMATTER.format(
@@ -417,6 +518,9 @@ private fun Long.toLiveTimestampText(): String =
 
 private fun Double.roundToChartPrecision(): Double =
     (this * 10_000.0).roundToLong() / 10_000.0
+
+private const val LIVE_VISIBLE_WINDOW_SECONDS = 60.0
+private const val LIVE_RIGHT_PADDING_SECONDS = 2.0
 
 private val LIVE_TIME_FORMATTER: DateTimeFormatter =
     DateTimeFormatter.ofPattern("HH:mm:ss")
