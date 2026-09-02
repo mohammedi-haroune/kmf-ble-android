@@ -85,6 +85,18 @@ adb exec-out run-as com.juncehome.lifepo4ble cat files/exports/battery-history.c
 
 The exporter pages through the database, so it does not load the full retained history into memory. The CSV has a UTC ISO-8601 timestamp and epoch milliseconds in every row.
 
+## Mac analytics dashboard
+
+The `analytics/` Streamlit dashboard reads `~/Downloads/battery-history.csv` by default and also accepts an uploaded CSV from its sidebar. It provides date/time/state filters, raw-to-daily grouping, interactive battery charts, daily power analysis, and a filtered CSV download.
+
+```bash
+python3 -m venv analytics/.venv
+analytics/.venv/bin/pip install -r analytics/requirements.txt
+analytics/.venv/bin/streamlit run analytics/app.py --server.address 127.0.0.1
+```
+
+Open `http://127.0.0.1:8501`. V1 is Mac-local only; it does not expose the dashboard to the network or synchronize data from the Android app.
+
 ## Meter Validation
 
 Record real-device findings in `docs/meter-protocol-notes.md`. Keep MAC addresses and sensitive observations redacted unless explicitly intended for sharing.

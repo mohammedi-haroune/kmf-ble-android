@@ -4,7 +4,7 @@
 
 This repository is currently centered on `planning/INDEX.md`, which points to the active planning documents. The current ESPHome BLE behavior reference lives at `planning/resources/kmf.yml`, and the implementation plan for the native Android app lives at `planning/plans/01-plan.md`. Follow the file map in `planning/plans/01-plan.md` when scaffolding the app: root Gradle files (`settings.gradle.kts`, `build.gradle.kts`, `gradle/libs.versions.toml`), the Android module in `app/`, Kotlin sources under `app/src/main/java/com/juncehome/lifepo4ble/`, and unit tests under `app/src/test/java/com/juncehome/lifepo4ble/`.
 
-Keep boundaries clear: `platform/` for permission policy, `protocol/` for KMF parsing and packet logging, `ble/` for scanning/GATT/session code, `data/` for DataStore and Room persistence, and `ui/` for ViewModel and Compose screens.
+Keep boundaries clear: `platform/` for permission policy, `protocol/` for KMF parsing and packet logging, `ble/` for scanning/GATT/session code, `data/` for DataStore and Room persistence, `ui/` for ViewModel and Compose screens, and `analytics/` for Mac-local CSV analysis.
 
 Be brief
 
@@ -24,6 +24,8 @@ POSIX `./gradlew` commands load the repo-level JDK setting from `gradle/jdk.env`
 - `adb logcat -d -s KMF-BLE`: preferred buffered app-log dump by app tag when PID filtering is not enough.
 - `adb shell run-as com.juncehome.lifepo4ble cat files/kmf-ble.log`: reads the app-owned persistent log file captured by `AppLog`.
 - `adb exec-out run-as com.juncehome.lifepo4ble cat files/exports/battery-history.csv > battery-history.csv`: extracts a History-tab CSV export to the Mac.
+- `analytics/.venv/bin/python -m pytest analytics/tests -q`: runs dashboard tests after installing `analytics/requirements.txt` into the local virtual environment.
+- `analytics/.venv/bin/streamlit run analytics/app.py --server.address 127.0.0.1`: runs the private Mac-local dashboard.
 
 If `gradlew` does not exist yet, create it before relying on project-local Gradle commands.
 
@@ -63,6 +65,13 @@ For KMF protocol changes, verify both levels:
 - Retain battery samples indefinitely; only the explicit **Clear saved battery history** action may delete them.
 - The History tab creates `files/exports/battery-history.csv`. Export in bounded database pages and write a temporary file before replacing the finished CSV, so the UI and BLE capture path remain smooth and ADB never reads a partial export.
 - Keep CSV columns stable and include both UTC ISO-8601 and epoch-millisecond timestamps. Use the command above to validate a real export on-device.
+
+## Mac Analytics Dashboard
+
+- V1 is a private, local Streamlit app under `analytics/`; bind it to `127.0.0.1`, not a LAN or external address.
+- It defaults to `~/Downloads/battery-history.csv` but must allow an upload override for any exported CSV path.
+- Preserve source UTC timestamps, display local time in charts, filter before grouping, average instantaneous readings, and retain the final cumulative energy totals per grouped interval.
+- Do not add Android network synchronization or WebView integration without a separately approved authenticated transport design.
 
 ## Commit & Pull Request Guidelines
 

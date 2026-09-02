@@ -8,3 +8,8 @@ db.db
 db.db-*
 web/liveline-power-spike/node_modules
 app/src/main/assets/liveline-power/assets
+.venv/
+__pycache__/
+.pytest_cache/
+.agents/
+.claude/
