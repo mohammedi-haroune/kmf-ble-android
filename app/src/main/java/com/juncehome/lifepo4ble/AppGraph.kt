@@ -12,6 +12,8 @@ import androidx.room.Room
 import com.juncehome.lifepo4ble.ble.AndroidBleScanner
 import com.juncehome.lifepo4ble.ble.AndroidBleSession
 import com.juncehome.lifepo4ble.ble.BleRepository
+import com.juncehome.lifepo4ble.collection.AndroidCompanionAssociationGateway
+import com.juncehome.lifepo4ble.collection.CompanionAssociationGateway
 import com.juncehome.lifepo4ble.data.DeviceStore
 import com.juncehome.lifepo4ble.data.KmfDatabase
 import com.juncehome.lifepo4ble.data.KmfBatteryHistoryExporter
@@ -24,6 +26,10 @@ private val Context.deviceDataStore by preferencesDataStore(name = "device")
 class AppGraph(
     private val application: Application,
 ) {
+    val companionAssociationGateway: CompanionAssociationGateway by lazy {
+        AndroidCompanionAssociationGateway(application)
+    }
+
     private val bluetoothManager: BluetoothManager by lazy {
         requireNotNull(application.getSystemService(BluetoothManager::class.java))
     }
