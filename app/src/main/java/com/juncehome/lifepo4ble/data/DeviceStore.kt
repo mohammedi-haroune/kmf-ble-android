@@ -9,21 +9,17 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.juncehome.lifepo4ble.collection.CollectionConfiguration
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 
 interface DeviceSnapshotStore {
     val snapshot: Flow<DeviceSnapshot?>
     val collectionConfiguration: Flow<CollectionConfiguration?>
-        get() = flowOf(null)
 
     suspend fun save(snapshot: DeviceSnapshot)
 
-    suspend fun enableAutonomousCollection(snapshot: DeviceSnapshot, associationId: Int) {
-        save(snapshot)
-    }
+    suspend fun enableAutonomousCollection(snapshot: DeviceSnapshot, associationId: Int)
 
-    suspend fun disableAutonomousCollection() = Unit
+    suspend fun disableAutonomousCollection()
 
     suspend fun clear()
 }

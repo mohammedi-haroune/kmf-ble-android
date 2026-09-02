@@ -4,6 +4,7 @@ import com.juncehome.lifepo4ble.ble.BleEvent
 import com.juncehome.lifepo4ble.ble.BleRepositoryContract
 import com.juncehome.lifepo4ble.ble.GattProfile
 import com.juncehome.lifepo4ble.ble.ScannedDevice
+import com.juncehome.lifepo4ble.collection.CollectionConfiguration
 import com.juncehome.lifepo4ble.data.DeviceSnapshot
 import com.juncehome.lifepo4ble.data.DeviceSnapshotStore
 import com.juncehome.lifepo4ble.data.KmfBatterySampleEntity
@@ -331,18 +332,30 @@ class BleViewModelTest {
 
     private class FakeDeviceStore(initial: DeviceSnapshot? = null) : DeviceSnapshotStore {
         private val snapshots = MutableStateFlow(initial)
+        private val configurations = MutableStateFlow<CollectionConfiguration?>(null)
         var saved: DeviceSnapshot? = null
 
         override val snapshot: Flow<DeviceSnapshot?> = snapshots
+        override val collectionConfiguration: Flow<CollectionConfiguration?> = configurations
 
         override suspend fun save(snapshot: DeviceSnapshot) {
             saved = snapshot
             snapshots.value = snapshot
         }
 
+        override suspend fun enableAutonomousCollection(snapshot: DeviceSnapshot, associationId: Int) {
+            save(snapshot)
+            configurations.value = CollectionConfiguration(snapshot, associationId, true)
+        }
+
+        override suspend fun disableAutonomousCollection() {
+            configurations.value = null
+        }
+
         override suspend fun clear() {
             saved = null
             snapshots.value = null
+            configurations.value = null
         }
     }
 
