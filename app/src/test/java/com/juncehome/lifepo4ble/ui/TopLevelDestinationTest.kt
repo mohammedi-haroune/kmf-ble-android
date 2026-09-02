@@ -25,4 +25,24 @@ class TopLevelDestinationTest {
             TopLevelDestination.startDestination,
         )
     }
+
+    @Test
+    fun knownRoutesResolveToTheirDestination() {
+        assertEquals(
+            TopLevelDestination.Live,
+            TopLevelDestination.fromRoute("live"),
+        )
+    }
+
+    @Test
+    fun unknownRoutesFallBackToDashboard() {
+        assertEquals(
+            TopLevelDestination.Dashboard,
+            TopLevelDestination.fromRoute("not-a-route"),
+        )
+        assertEquals(
+            TopLevelDestination.Dashboard,
+            TopLevelDestination.fromRoute(null),
+        )
+    }
 }

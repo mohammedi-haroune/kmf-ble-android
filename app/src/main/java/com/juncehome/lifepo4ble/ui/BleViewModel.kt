@@ -9,6 +9,7 @@ import com.juncehome.lifepo4ble.ble.ScannedDevice
 import com.juncehome.lifepo4ble.data.DeviceSnapshot
 import com.juncehome.lifepo4ble.data.DeviceSnapshotStore
 import com.juncehome.lifepo4ble.data.KmfBatterySampleEntity
+import com.juncehome.lifepo4ble.data.KmfBatteryHistoryExportStore
 import com.juncehome.lifepo4ble.data.KmfHistoryStore
 import com.juncehome.lifepo4ble.data.KmfNotificationObservation
 import com.juncehome.lifepo4ble.data.KmfWriteObservation
@@ -29,6 +30,7 @@ class BleViewModel(
     private val repository: BleRepositoryContract,
     private val deviceStore: DeviceSnapshotStore,
     private val historyStore: KmfHistoryStore,
+    private val batteryHistoryExportStore: KmfBatteryHistoryExportStore? = null,
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val scope: CoroutineScope? = null,
     private val reconnectDelayMs: Long = 1_000L,
@@ -47,6 +49,8 @@ class BleViewModel(
     val uiState: StateFlow<BleUiState> = mutableUiState
     private val mutableRecentBatterySamples = MutableStateFlow<List<KmfBatterySampleEntity>>(emptyList())
     val recentBatterySamples: StateFlow<List<KmfBatterySampleEntity>> = mutableRecentBatterySamples
+    private val mutableBatteryHistoryStatus = MutableStateFlow<String?>(null)
+    val batteryHistoryStatus: StateFlow<String?> = mutableBatteryHistoryStatus
 
     init {
         workScope.launch {
@@ -148,6 +152,35 @@ class BleViewModel(
     fun clearLog() {
         mutableUiState.update { state ->
             state.copy(packetLog = emptyList())
+        }
+    }
+
+    fun exportBatteryHistory() {
+        val exportStore = batteryHistoryExportStore ?: return
+        workScope.launch {
+            runCatching { exportStore.export() }
+                .onSuccess { export ->
+                    mutableBatteryHistoryStatus.value = "Exported ${export.rowCount} samples to files/exports/${export.file.name}"
+                }
+                .onFailure { error ->
+                    AppLog.e("failed to export battery history", error, TAG)
+                    mutableBatteryHistoryStatus.value = "Export failed: ${error.message.orEmpty()}"
+                }
+        }
+    }
+
+    fun clearBatteryHistory() {
+        val exportStore = batteryHistoryExportStore ?: return
+        workScope.launch {
+            runCatching { exportStore.clear() }
+                .onSuccess {
+                    mutableRecentBatterySamples.value = emptyList()
+                    mutableBatteryHistoryStatus.value = "Saved battery history cleared"
+                }
+                .onFailure { error ->
+                    AppLog.e("failed to clear battery history", error, TAG)
+                    mutableBatteryHistoryStatus.value = "Clear failed: ${error.message.orEmpty()}"
+                }
         }
     }
 

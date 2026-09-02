@@ -70,36 +70,43 @@ export function App() {
   )
 
   return (
-    <main className="screen">
-      <section className="header">
-        <div>
-          <div className="eyebrow">Experimental</div>
-          <h1>Power</h1>
-          <div className="status">{status}</div>
-        </div>
-        <div className="latest">{formatWatts(payload.latestValue)}</div>
-      </section>
+    // <main className="screen">
+    //   <section className="header">
+    //     <div>
+    //       <div className="eyebrow">Experimental</div>
+    //       <h1>Power</h1>
+    //       <div className="status">{status}</div>
+    //     </div>
+    //     <div className="latest">{formatWatts(payload.latestValue)}</div>
+    //   </section>
 
-      <section className="chart-shell" aria-label="Power chart">
-        <div className="chart-frame">
-          {/* Keep the live series readable at low power by using a slightly thicker stroke. */}
+    //   <section className="chart-shell" aria-label="Power chart">
+    //     <div className="chart-frame">
+          // {/* Keep the live series readable at low power by using a slightly thicker stroke. */}
+        <div style={{ height: 350}}>
           <Liveline
             data={chartData}
             value={payload.latestValue}
             theme="dark"
             color="#60a5fa"
-            window={60}
-            showValue={true}
-            valueMomentumColor={true}
-            exaggerate={true}
-            windows={[{ label: '60s', secs: 60 }]}
-            windowStyle="text"
-            fill={false}
-            lineWidth={3}
+            window={30}
+            // showValue={true}
+            // valueMomentumColor={true}
+            // exaggerate={true}
+            windows={[
+              { label: '5s', secs: 5 },
+              { label: '30s', secs: 30 },
+              { label: '1m', secs: 60 },
+              { label: '5m', secs: 300 },
+            ]}
+            windowStyle="rounded"
+            // fill={false}
+            // lineWidth={3}
             formatValue={formatWatts}
           />
         </div>
-      </section>
-    </main>
+    //     </div>
+    //   </section>
+    // </main>
   )
 }

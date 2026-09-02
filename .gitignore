@@ -7,3 +7,4 @@ local.properties
 db.db
 db.db-*
 web/liveline-power-spike/node_modules
+app/src/main/assets/liveline-power/assets

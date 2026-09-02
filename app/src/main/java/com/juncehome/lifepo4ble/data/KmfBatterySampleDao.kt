@@ -32,4 +32,18 @@ interface KmfBatterySampleDao {
         """
     )
     fun observeRecent(deviceAddress: String, limit: Int): Flow<List<KmfBatterySampleEntity>>
+
+    @Query(
+        """
+        SELECT *
+        FROM kmf_battery_sample
+        WHERE id > :afterId
+        ORDER BY id ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun readAfterId(afterId: Long, limit: Int): List<KmfBatterySampleEntity>
+
+    @Query("DELETE FROM kmf_battery_sample")
+    suspend fun deleteAll()
 }

@@ -4,7 +4,7 @@
 
 This repository is currently centered on `planning/INDEX.md`, which points to the active planning documents. The current ESPHome BLE behavior reference lives at `planning/resources/kmf.yml`, and the implementation plan for the native Android app lives at `planning/plans/01-plan.md`. Follow the file map in `planning/plans/01-plan.md` when scaffolding the app: root Gradle files (`settings.gradle.kts`, `build.gradle.kts`, `gradle/libs.versions.toml`), the Android module in `app/`, Kotlin sources under `app/src/main/java/com/juncehome/lifepo4ble/`, and unit tests under `app/src/test/java/com/juncehome/lifepo4ble/`.
 
-Keep boundaries clear: `platform/` for permission policy, `protocol/` for KMF parsing and packet logging, `ble/` for scanning/GATT/session code, `data/` for DataStore persistence, and `ui/` for ViewModel and Compose screens.
+Keep boundaries clear: `platform/` for permission policy, `protocol/` for KMF parsing and packet logging, `ble/` for scanning/GATT/session code, `data/` for DataStore and Room persistence, and `ui/` for ViewModel and Compose screens.
 
 Be brief
 
@@ -23,6 +23,7 @@ POSIX `./gradlew` commands load the repo-level JDK setting from `gradle/jdk.env`
 - `adb logcat --pid "$(adb shell pidof -s com.juncehome.lifepo4ble)" -v threadtime`: preferred live app-log stream when the app is running.
 - `adb logcat -d -s KMF-BLE`: preferred buffered app-log dump by app tag when PID filtering is not enough.
 - `adb shell run-as com.juncehome.lifepo4ble cat files/kmf-ble.log`: reads the app-owned persistent log file captured by `AppLog`.
+- `adb exec-out run-as com.juncehome.lifepo4ble cat files/exports/battery-history.csv > battery-history.csv`: extracts a History-tab CSV export to the Mac.
 
 If `gradlew` does not exist yet, create it before relying on project-local Gradle commands.
 
@@ -55,6 +56,13 @@ For KMF protocol changes, verify both levels:
 - JVM tests for parser/reducer/startup-loop behavior.
 - On-device validation that `Capacity Ah` and `SoC` appear without the official app being open at the same time.
 - The full install-launch-log pass on the connected device, with any BLE behavior regression called out explicitly.
+
+## Battery History and CSV Export
+
+- Persist battery state only: timestamp, voltage, current, power, charging state, remaining time/Ah, capacity Ah, SoC, and energy totals. Do not add raw frame-event, connection, disconnect, or error history unless explicitly requested.
+- Retain battery samples indefinitely; only the explicit **Clear saved battery history** action may delete them.
+- The History tab creates `files/exports/battery-history.csv`. Export in bounded database pages and write a temporary file before replacing the finished CSV, so the UI and BLE capture path remain smooth and ADB never reads a partial export.
+- Keep CSV columns stable and include both UTC ISO-8601 and epoch-millisecond timestamps. Use the command above to validate a real export on-device.
 
 ## Commit & Pull Request Guidelines
 

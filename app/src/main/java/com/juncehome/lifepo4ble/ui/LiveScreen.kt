@@ -75,11 +75,11 @@ fun LiveScreen(
             style = MaterialTheme.typography.headlineMedium,
         )
 
-        LiveSummaryCard(content = content)
-        LiveRangeSelector(
-            selectedRange = selectedRange,
-            onRangeSelected = { selectedRange = it },
-        )
+        // LiveSummaryCard(content = content)
+        // LiveRangeSelector(
+        //     selectedRange = selectedRange,
+        //     onRangeSelected = { selectedRange = it },
+        // )
 
         content.emptyState?.let { emptyState ->
             LiveEmptyStateCard(
@@ -87,10 +87,10 @@ fun LiveScreen(
                 connectionLabel = content.connectionLabel,
             )
         } ?: content.charts.forEach { chart ->
-            LiveChartCard(
-                chart = chart,
-                range = selectedRange,
-            )
+            // LiveChartCard(
+            //     chart = chart,
+            //     range = selectedRange,
+            // )
             if (chart.title == "Power") {
                 LivelinePowerExperimentCard(
                     chart = chart,
@@ -202,13 +202,13 @@ fun buildLiveContent(
         lastUpdatedTimestampMs = newestTimestampMs,
         emptyState = null,
         charts = listOf(
-            groupedSamples.toChart(
-                title = "State of charge",
-                unit = "%",
-                firstTimestampMs = firstTimestampMs,
-                selector = { sample -> sample.entity.socPercent },
-                formatter = Double::toPercentText,
-            ),
+            // groupedSamples.toChart(
+            //     title = "State of charge",
+            //     unit = "%",
+            //     firstTimestampMs = firstTimestampMs,
+            //     selector = { sample -> sample.entity.socPercent },
+            //     formatter = Double::toPercentText,
+            // ),
             groupedSamples.toChart(
                 title = "Power",
                 unit = "W",
@@ -216,20 +216,20 @@ fun buildLiveContent(
                 selector = { sample -> sample.entity.powerW },
                 formatter = { value -> value.toLivePowerText() },
             ),
-            groupedSamples.toChart(
-                title = "Current",
-                unit = "A",
-                firstTimestampMs = firstTimestampMs,
-                selector = { sample -> sample.entity.currentA },
-                formatter = { value -> value.toUnitText("A") },
-            ),
-            groupedSamples.toChart(
-                title = "Voltage",
-                unit = "V",
-                firstTimestampMs = firstTimestampMs,
-                selector = { sample -> sample.entity.voltageV },
-                formatter = { value -> value.toUnitText("V") },
-            ),
+            // groupedSamples.toChart(
+            //     title = "Current",
+            //     unit = "A",
+            //     firstTimestampMs = firstTimestampMs,
+            //     selector = { sample -> sample.entity.currentA },
+            //     formatter = { value -> value.toUnitText("A") },
+            // ),
+            // groupedSamples.toChart(
+            //     title = "Voltage",
+            //     unit = "V",
+            //     firstTimestampMs = firstTimestampMs,
+            //     selector = { sample -> sample.entity.voltageV },
+            //     formatter = { value -> value.toUnitText("V") },
+            // ),
         ),
     )
 }

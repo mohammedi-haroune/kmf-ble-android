@@ -73,6 +73,18 @@ adb devices
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
+## Battery History and CSV Export
+
+The app keeps timestamped battery samples locally until you clear them from the **History** tab. Samples include voltage, current, power, charging state, remaining and capacity Ah, SoC, and charge/discharge energy totals. It does not persist raw BLE frame events for this history.
+
+Tap **Export CSV** in the History tab, then extract the private export to the Mac with ADB:
+
+```bash
+adb exec-out run-as com.juncehome.lifepo4ble cat files/exports/battery-history.csv > battery-history.csv
+```
+
+The exporter pages through the database, so it does not load the full retained history into memory. The CSV has a UTC ISO-8601 timestamp and epoch milliseconds in every row.
+
 ## Meter Validation
 
 Record real-device findings in `docs/meter-protocol-notes.md`. Keep MAC addresses and sensitive observations redacted unless explicitly intended for sharing.

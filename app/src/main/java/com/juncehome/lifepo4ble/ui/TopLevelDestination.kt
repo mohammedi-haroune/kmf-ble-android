@@ -15,6 +15,9 @@ enum class TopLevelDestination(
     companion object {
         val startDestination: TopLevelDestination = Dashboard
 
+        fun fromRoute(route: String?): TopLevelDestination =
+            entries.firstOrNull { it.route == route } ?: startDestination
+
         val bottomBarItems: List<TopLevelDestination> = listOf(
             Dashboard,
             Live,

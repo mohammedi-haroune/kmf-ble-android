@@ -62,11 +62,7 @@ class KmfHistoryRepositoryTest {
             )
         )
 
-        assertEquals(listOf("A", "C"), frameEventDao.inserted.map { it.frameType })
-        assertEquals(
-            listOf("1326,1080,0,5793", "1820,486,0,0,0,0"),
-            frameEventDao.inserted.map { it.parsedFieldsCsv },
-        )
+        assertTrue(frameEventDao.inserted.isEmpty())
 
         val sample = batterySampleDao.inserted.single()
         assertEquals("AA:BB:CC:DD:EE:FF", sample.deviceAddress)
@@ -100,9 +96,7 @@ class KmfHistoryRepositoryTest {
             )
         )
 
-        val event = frameEventDao.inserted.single()
-        assertEquals("UNKNOWN", event.frameType)
-        assertNull(event.parsedFieldsCsv)
+        assertTrue(frameEventDao.inserted.isEmpty())
         assertTrue(batterySampleDao.inserted.isEmpty())
     }
 
@@ -128,5 +122,10 @@ class KmfHistoryRepositoryTest {
 
         override fun observeRecent(deviceAddress: String, limit: Int): Flow<List<KmfBatterySampleEntity>> =
             emptyFlow()
+
+        override suspend fun readAfterId(afterId: Long, limit: Int): List<KmfBatterySampleEntity> =
+            emptyList()
+
+        override suspend fun deleteAll() = Unit
     }
 }

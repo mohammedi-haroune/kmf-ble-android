@@ -9,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.juncehome.lifepo4ble.ui.TopLevelDestination
 import com.juncehome.lifepo4ble.platform.BlePermissionPolicy
 import com.juncehome.lifepo4ble.ui.BleViewModel
 
@@ -31,12 +32,16 @@ class MainActivity : ComponentActivity() {
         (application as BleApplication).filesDir.resolve("kmf-ble.log").appendText("I/KMF-BLE: MainActivity.onCreate\n")
         AppLog.d("MainActivity.onCreate", "KMF-BLE")
         refreshReadiness()
+        val startDestination = TopLevelDestination.fromRoute(
+            intent?.getStringExtra(LaunchIntentExtras.EXTRA_START_DESTINATION),
+        )
         setContent {
             val state = viewModel.uiState.collectAsStateWithLifecycle().value
             KmfBleApp(
                 state = state,
                 viewModel = viewModel,
                 onRequestPermissions = ::requestBlePermissions,
+                startDestination = startDestination,
             )
         }
     }

@@ -14,6 +14,7 @@ import com.juncehome.lifepo4ble.ble.AndroidBleSession
 import com.juncehome.lifepo4ble.ble.BleRepository
 import com.juncehome.lifepo4ble.data.DeviceStore
 import com.juncehome.lifepo4ble.data.KmfDatabase
+import com.juncehome.lifepo4ble.data.KmfBatteryHistoryExporter
 import com.juncehome.lifepo4ble.data.KmfHistoryRepository
 import com.juncehome.lifepo4ble.platform.BlePermissionPolicy
 import com.juncehome.lifepo4ble.ui.BleViewModel
@@ -46,6 +47,13 @@ class AppGraph(
         )
     }
 
+    private val batteryHistoryExporter by lazy {
+        KmfBatteryHistoryExporter(
+            batterySampleDao = database.kmfBatterySampleDao(),
+            exportsDirectory = application.filesDir.resolve("exports"),
+        )
+    }
+
     private val scanner by lazy {
         AndroidBleScanner(
             context = application,
@@ -68,7 +76,12 @@ class AppGraph(
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(BleViewModel::class.java)) {
-                return BleViewModel(repository, deviceStore, historyRepository) as T
+                return BleViewModel(
+                    repository = repository,
+                    deviceStore = deviceStore,
+                    historyStore = historyRepository,
+                    batteryHistoryExportStore = batteryHistoryExporter,
+                ) as T
             }
             error("Unknown ViewModel class ${modelClass.name}")
         }

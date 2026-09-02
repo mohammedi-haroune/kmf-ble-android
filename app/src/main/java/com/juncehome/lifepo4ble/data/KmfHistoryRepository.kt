@@ -3,8 +3,6 @@ package com.juncehome.lifepo4ble.data
 import com.juncehome.lifepo4ble.AppLog
 import com.juncehome.lifepo4ble.protocol.KmfFrame
 import com.juncehome.lifepo4ble.protocol.KmfReading
-import com.juncehome.lifepo4ble.protocol.PacketDirection
-import com.juncehome.lifepo4ble.protocol.PacketFormatter
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -62,54 +60,14 @@ class KmfHistoryRepository(
     }
 
     override suspend fun recordNotification(observation: KmfNotificationObservation) {
-        val entry = PacketFormatter.toEntry(
-            timestampMs = observation.timestampMs,
-            direction = PacketDirection.INBOUND,
-            bytes = observation.bytes,
-        )
-
         sessionMutex.withLock {
             if (observation.frames.isEmpty()) {
-                frameEventDao.insert(
-                    KmfFrameEventEntity(
-                        timestampMs = observation.timestampMs,
-                        deviceAddress = observation.deviceAddress,
-                        deviceName = observation.deviceName,
-                        direction = PacketDirection.INBOUND.name,
-                        frameType = UNKNOWN_FRAME_TYPE,
-                        rawHex = entry.hex,
-                        rawAscii = entry.ascii,
-                        parsedFieldsCsv = null,
-                        serviceUuid = observation.serviceUuid,
-                        notifyUuid = observation.notifyUuid,
-                        writeUuid = observation.writeUuid,
-                        writeSuccess = null,
-                        error = null,
-                    )
-                )
                 return
             }
 
             val sessionState = sessionStateByDevice.getOrPut(observation.deviceAddress) { SessionFrameState() }
             observation.frames.forEach { frame ->
                 sessionState.update(frame)
-                frameEventDao.insert(
-                    KmfFrameEventEntity(
-                        timestampMs = observation.timestampMs,
-                        deviceAddress = observation.deviceAddress,
-                        deviceName = observation.deviceName,
-                        direction = PacketDirection.INBOUND.name,
-                        frameType = frame.frameType(),
-                        rawHex = entry.hex,
-                        rawAscii = entry.ascii,
-                        parsedFieldsCsv = frame.parsedFieldsCsv(),
-                        serviceUuid = observation.serviceUuid,
-                        notifyUuid = observation.notifyUuid,
-                        writeUuid = observation.writeUuid,
-                        writeSuccess = null,
-                        error = null,
-                    )
-                )
             }
 
             batterySampleDao.insert(
@@ -143,28 +101,7 @@ class KmfHistoryRepository(
     }
 
     override suspend fun recordWrite(observation: KmfWriteObservation) {
-        val entry = PacketFormatter.toEntry(
-            timestampMs = observation.timestampMs,
-            direction = PacketDirection.OUTBOUND,
-            bytes = observation.bytes,
-        )
-        frameEventDao.insert(
-            KmfFrameEventEntity(
-                timestampMs = observation.timestampMs,
-                deviceAddress = observation.deviceAddress,
-                deviceName = observation.deviceName,
-                direction = PacketDirection.OUTBOUND.name,
-                frameType = WRITE_FRAME_TYPE,
-                rawHex = entry.hex,
-                rawAscii = entry.ascii,
-                parsedFieldsCsv = null,
-                serviceUuid = observation.serviceUuid,
-                notifyUuid = observation.notifyUuid,
-                writeUuid = observation.writeUuid,
-                writeSuccess = observation.writeSuccess,
-                error = observation.error,
-            )
-        )
+        AppLog.d("battery-only history skipped outbound write", TAG)
     }
 
     override fun observeLatestBatterySample(deviceAddress: String): Flow<KmfBatterySampleEntity?> =
@@ -210,24 +147,8 @@ class KmfHistoryRepository(
 
     private companion object {
         const val TAG = "KMF-BLE"
-        const val UNKNOWN_FRAME_TYPE = "UNKNOWN"
-        const val WRITE_FRAME_TYPE = "WRITE"
     }
 }
-
-private fun KmfFrame.frameType(): String =
-    when (this) {
-        is KmfFrame.A -> "A"
-        is KmfFrame.B -> "B"
-        is KmfFrame.C -> "C"
-    }
-
-private fun KmfFrame.parsedFieldsCsv(): String? =
-    when (this) {
-        is KmfFrame.A -> rawFields.toCsv()
-        is KmfFrame.B -> fields.toCsv()
-        is KmfFrame.C -> rawFields.toCsv()
-    }
 
 private fun List<Int>.toCsv(): String? =
     takeIf { it.isNotEmpty() }?.joinToString(separator = ",")

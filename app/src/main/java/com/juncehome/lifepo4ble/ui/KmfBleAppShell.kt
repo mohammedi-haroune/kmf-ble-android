@@ -29,11 +29,13 @@ fun KmfBleAppShell(
     state: BleUiState,
     viewModel: BleViewModel,
     onRequestPermissions: () -> Unit,
+    startDestination: TopLevelDestination = TopLevelDestination.startDestination,
 ) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination
     val recentBatterySamples by viewModel.recentBatterySamples.collectAsStateWithLifecycle()
+    val batteryHistoryStatus by viewModel.batteryHistoryStatus.collectAsStateWithLifecycle()
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -71,7 +73,7 @@ fun KmfBleAppShell(
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = TopLevelDestination.startDestination.route,
+            startDestination = startDestination.route,
             modifier = Modifier.fillMaxSize(),
         ) {
             composable(TopLevelDestination.Dashboard.route) {
@@ -88,9 +90,10 @@ fun KmfBleAppShell(
                 )
             }
             composable(TopLevelDestination.History.route) {
-                PlaceholderScreen(
-                    title = "History",
-                    description = "Historical analytics and grouped queries are still pending.",
+                HistoryScreen(
+                    status = batteryHistoryStatus,
+                    onExport = viewModel::exportBatteryHistory,
+                    onClear = viewModel::clearBatteryHistory,
                     contentPadding = innerPadding,
                 )
             }
@@ -113,6 +116,41 @@ fun KmfBleAppShell(
                     onClearLog = viewModel::clearLog,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun HistoryScreen(
+    status: String?,
+    onExport: () -> Unit,
+    onClear: () -> Unit,
+    contentPadding: PaddingValues,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(contentPadding)
+            .padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(text = "Battery history", style = MaterialTheme.typography.headlineMedium)
+        Text(
+            text = "Exports every saved battery measurement with a UTC timestamp. " +
+                "History is retained until you clear it.",
+            style = MaterialTheme.typography.bodyLarge,
+        )
+        androidx.compose.material3.Button(onClick = onExport) {
+            Text(text = "Export CSV")
+        }
+        Text(
+            text = "Mac: adb exec-out run-as com.juncehome.lifepo4ble cat files/exports/battery-history.csv > battery-history.csv",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        status?.let { Text(text = it, style = MaterialTheme.typography.bodyMedium) }
+        androidx.compose.material3.OutlinedButton(onClick = onClear) {
+            Text(text = "Clear saved battery history")
         }
     }
 }
