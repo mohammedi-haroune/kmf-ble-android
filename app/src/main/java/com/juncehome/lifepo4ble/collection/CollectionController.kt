@@ -1,5 +1,6 @@
 package com.juncehome.lifepo4ble.collection
 
+import com.juncehome.lifepo4ble.AppLog
 import com.juncehome.lifepo4ble.ble.BleEvent
 import com.juncehome.lifepo4ble.ble.BleRepositoryContract
 import com.juncehome.lifepo4ble.ble.GattProfile
@@ -12,6 +13,7 @@ import com.juncehome.lifepo4ble.protocol.KmfLineParser
 import com.juncehome.lifepo4ble.protocol.KmfReading
 import com.juncehome.lifepo4ble.protocol.KmfReadingMerger
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -92,11 +94,7 @@ class CollectionControllerImpl(
         stoppedByUser = false
         deviceUnavailable = false
         reconnectAttempt = 0
-        parser = KmfLineParser()
-        reading = KmfReading()
-        profile = null
-        hasAFrame = false
-        hasBFrame = false
+        resetProtocolSession()
 
         if (!configuration.autonomousEnabled) {
             this.configuration = null
@@ -160,7 +158,8 @@ class CollectionControllerImpl(
             is BleEvent.Connecting -> {
                 if (event.device.address != activeConfiguration.snapshot.address) return
                 cancelReconnect()
-                historyStore.resetSession(event.device.address)
+                resetProtocolSession()
+                persistHistoryReset(event.device.address)
                 updateState(CollectionPhase.CONNECTING)
             }
             is BleEvent.Connected -> {
@@ -168,6 +167,7 @@ class CollectionControllerImpl(
                 updateState(CollectionPhase.CONNECTING)
             }
             is BleEvent.ServicesDiscovered -> {
+                resetProtocolSession()
                 profile = event.profile
                 updateState(CollectionPhase.BOOTSTRAPPING)
                 startBootstrap()
@@ -175,6 +175,7 @@ class CollectionControllerImpl(
             is BleEvent.NotificationReceived -> handleNotification(event, activeConfiguration)
             is BleEvent.Disconnected -> {
                 cancelBootstrapAndPolling()
+                resetProtocolSession()
                 if (deviceUnavailable) {
                     updateState(CollectionPhase.WAITING_FOR_DEVICE)
                 } else {
@@ -183,6 +184,7 @@ class CollectionControllerImpl(
             }
             is BleEvent.Error -> {
                 cancelBootstrapAndPolling()
+                resetProtocolSession()
                 if (deviceUnavailable) {
                     updateState(CollectionPhase.WAITING_FOR_DEVICE)
                 } else {
@@ -210,7 +212,7 @@ class CollectionControllerImpl(
             }
         }
         val activeProfile = profile
-        historyStore.recordNotification(
+        persistNotification(
             KmfNotificationObservation(
                 timestampMs = clock(),
                 deviceAddress = activeConfiguration.snapshot.address,
@@ -222,7 +224,7 @@ class CollectionControllerImpl(
                 bytes = event.bytes.copyOf(),
                 frames = frames,
                 mergedReading = reading,
-            )
+            ),
         )
         if (hasAFrame && hasBFrame && mutableState.value.phase != CollectionPhase.COLLECTING) {
             reconnectAttempt = 0
@@ -285,6 +287,32 @@ class CollectionControllerImpl(
         repository.connect(activeConfiguration.snapshot.toScannedDevice(), activeConfiguration.snapshot)
     }
 
+    private fun resetProtocolSession() {
+        parser = KmfLineParser()
+        reading = KmfReading()
+        profile = null
+        hasAFrame = false
+        hasBFrame = false
+    }
+
+    private suspend fun persistHistoryReset(deviceAddress: String) {
+        try {
+            historyStore.resetSession(deviceAddress)
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            AppLog.e("failed to reset collection history session", error, TAG)
+        }
+    }
+
+    private suspend fun persistNotification(observation: KmfNotificationObservation) {
+        try {
+            historyStore.recordNotification(observation)
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            AppLog.e("failed to persist collection notification", error, TAG)
+        }
+    }
+
     private fun cancelCollectionJobs() {
         cancelBootstrapAndPolling()
         cancelReconnect()
@@ -324,6 +352,7 @@ class CollectionControllerImpl(
     }
 
     private companion object {
+        const val TAG = "KMF-BLE"
         const val PREFERRED_MTU = 100
         const val INITIAL_BOOTSTRAP_DELAY_MS = 1_000L
         const val POST_MTU_DELAY_MS = 500L

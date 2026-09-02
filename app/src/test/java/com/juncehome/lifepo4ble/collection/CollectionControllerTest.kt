@@ -142,6 +142,83 @@ class CollectionControllerTest {
     }
 
     @Test
+    fun reconnectWithOnlyFreshAFrameKeepsBootstrapRunning() = runTest {
+        val fixture = fixture(testScheduler)
+        try {
+            fixture.controller.start(configuration)
+            fixture.emitReadyAAndBFrames()
+            assertEquals(CollectionPhase.COLLECTING, fixture.controller.state.value.phase)
+
+            fixture.repository.emit(BleEvent.Disconnected("out of range"))
+            advanceTimeBy(1_000)
+            runCurrent()
+            assertEquals(2, fixture.repository.connectCalls.size)
+
+            fixture.repository.emit(BleEvent.ServicesDiscovered(profile))
+            fixture.repository.emit(
+                BleEvent.NotificationReceived(
+                    profile.notifyUuid,
+                    ":A=1326,1080,1,5793,57930,1000\n".encodeToByteArray(),
+                )
+            )
+            assertEquals(CollectionPhase.BOOTSTRAPPING, fixture.controller.state.value.phase)
+            advanceTimeBy(1_500)
+            runCurrent()
+            assertEquals(1, fixture.repository.countWrites(":*"))
+
+            advanceTimeBy(2_000)
+            runCurrent()
+            assertEquals(2, fixture.repository.countWrites(":*"))
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test
+    fun historyResetFailureDoesNotTerminateDisconnectHandling() = runTest {
+        val fixture = fixture(testScheduler)
+        try {
+            fixture.history.throwOnReset = true
+            fixture.controller.start(configuration)
+            fixture.repository.emit(
+                BleEvent.Connecting(
+                    ScannedDevice(configuration.snapshot.name, configuration.snapshot.address, 0, emptyList())
+                )
+            )
+            fixture.repository.emit(BleEvent.Disconnected("out of range"))
+            advanceTimeBy(1_000)
+            runCurrent()
+
+            assertEquals(2, fixture.repository.connectCalls.size)
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test
+    fun historyNotificationFailureDoesNotTerminateErrorHandling() = runTest {
+        val fixture = fixture(testScheduler)
+        try {
+            fixture.history.throwOnNotification = true
+            fixture.controller.start(configuration)
+            fixture.repository.emit(BleEvent.ServicesDiscovered(profile))
+            fixture.repository.emit(
+                BleEvent.NotificationReceived(
+                    profile.notifyUuid,
+                    ":A=1326,1080,1,5793,57930,1000\n".encodeToByteArray(),
+                )
+            )
+            fixture.repository.emit(BleEvent.Error("GATT failed"))
+            advanceTimeBy(1_000)
+            runCurrent()
+
+            assertEquals(2, fixture.repository.connectCalls.size)
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test
     fun notificationPersistsParsedBatteryReadingForConfiguredMeter() = runTest {
         val fixture = fixture(testScheduler)
         try {
@@ -228,8 +305,14 @@ class CollectionControllerTest {
 
     private class FakeHistoryStore : KmfHistoryStore {
         val notifications = mutableListOf<KmfNotificationObservation>()
-        override suspend fun resetSession(deviceAddress: String) = Unit
+        var throwOnReset = false
+        var throwOnNotification = false
+
+        override suspend fun resetSession(deviceAddress: String) {
+            if (throwOnReset) error("history reset failed")
+        }
         override suspend fun recordNotification(observation: KmfNotificationObservation) {
+            if (throwOnNotification) error("history notification failed")
             notifications += observation
         }
         override suspend fun recordWrite(observation: KmfWriteObservation) = Unit
