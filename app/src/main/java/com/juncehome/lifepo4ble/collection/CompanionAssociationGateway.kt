@@ -1,8 +1,8 @@
 package com.juncehome.lifepo4ble.collection
 
-import android.companion.AssociationInfo
+import android.bluetooth.le.ScanFilter
 import android.companion.AssociationRequest
-import android.companion.BluetoothDeviceFilter
+import android.companion.BluetoothLeDeviceFilter
 import android.companion.CompanionDeviceManager
 import android.companion.DeviceNotAssociatedException
 import android.companion.ObservingDevicePresenceRequest
@@ -23,15 +23,31 @@ interface CompanionAssociationGateway {
         onFailure: (Throwable) -> Unit,
     )
 
-    fun associationIdFromResult(resultData: Intent): Int?
+    /**
+     * Reads an association ID from successful activity-result data only. Callers must preserve the
+     * selected address independently because Android exposes this ID only on API 33 and above.
+     */
+    fun associationIdFromResult(successfulResultData: Intent): Int?
 
     fun startPresenceObservation(address: String)
 
     fun stopPresenceObservation(address: String)
 }
 
+enum class CompanionAssociationTransport { BLUETOOTH_LE }
+
+data class CompanionAssociationFilter(
+    val transport: CompanionAssociationTransport,
+    val address: String,
+)
+
 object CompanionAssociationPolicy {
     fun canConfigure(apiLevel: Int, hasFeature: Boolean): Boolean = apiLevel >= 31 && hasFeature
+
+    fun filterFor(address: String): CompanionAssociationFilter = CompanionAssociationFilter(
+        transport = CompanionAssociationTransport.BLUETOOTH_LE,
+        address = address,
+    )
 }
 
 /**
@@ -71,8 +87,9 @@ class AndroidCompanionAssociationGateway(
             return
         }
 
+        val filter = CompanionAssociationPolicy.filterFor(address)
         val request = AssociationRequest.Builder()
-            .addDeviceFilter(BluetoothDeviceFilter.Builder().setAddress(address).build())
+            .addDeviceFilter(leDeviceFilter(filter))
             .setSingleDevice(true)
             .build()
 
@@ -100,12 +117,15 @@ class AndroidCompanionAssociationGateway(
         }
     }
 
-    override fun associationIdFromResult(resultData: Intent): Int? {
+    override fun associationIdFromResult(successfulResultData: Intent): Int? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             return null
         }
-        return resultData
-            .getParcelableExtra(CompanionDeviceManager.EXTRA_ASSOCIATION, AssociationInfo::class.java)
+        return successfulResultData
+            .getParcelableExtra(
+                CompanionDeviceManager.EXTRA_ASSOCIATION,
+                android.companion.AssociationInfo::class.java,
+            )
             ?.id
     }
 
@@ -144,6 +164,14 @@ class AndroidCompanionAssociationGateway(
             ?: throw CompanionReSetupRequiredException(address)
         return ObservingDevicePresenceRequest.Builder()
             .setAssociationId(associationId)
+            .build()
+    }
+
+    private fun leDeviceFilter(filter: CompanionAssociationFilter): BluetoothLeDeviceFilter = when (
+        filter.transport
+    ) {
+        CompanionAssociationTransport.BLUETOOTH_LE -> BluetoothLeDeviceFilter.Builder()
+            .setScanFilter(ScanFilter.Builder().setDeviceAddress(filter.address).build())
             .build()
     }
 }
