@@ -1,17 +1,24 @@
 package com.juncehome.lifepo4ble
 
+import android.app.Activity
 import android.bluetooth.BluetoothManager
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import com.juncehome.lifepo4ble.collection.CollectionVisibility
 import com.juncehome.lifepo4ble.ui.TopLevelDestination
 import com.juncehome.lifepo4ble.platform.BlePermissionPolicy
 import com.juncehome.lifepo4ble.ui.BleViewModel
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val viewModel: BleViewModel by lazy {
@@ -27,11 +34,27 @@ class MainActivity : ComponentActivity() {
         refreshReadiness()
     }
 
+    private val associationLauncher = registerForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val gateway = (application as BleApplication).graph.companionAssociationGateway
+            viewModel.onAssociationCompleted(gateway.associationIdFromResult(result.data ?: Intent()))
+        } else {
+            viewModel.onAssociationCanceled()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         (application as BleApplication).filesDir.resolve("kmf-ble.log").appendText("I/KMF-BLE: MainActivity.onCreate\n")
         AppLog.d("MainActivity.onCreate", "KMF-BLE")
         refreshReadiness()
+        lifecycleScope.launch {
+            viewModel.associationIntentSenders.collect { intentSender ->
+                associationLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
+            }
+        }
         val startDestination = TopLevelDestination.fromRoute(
             intent?.getStringExtra(LaunchIntentExtras.EXTRA_START_DESTINATION),
         )
@@ -49,6 +72,17 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshReadiness()
+        viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+    }
+
+    override fun onStop() {
+        viewModel.onAppVisibilityChanged(CollectionVisibility.BACKGROUND)
+        super.onStop()
     }
 
     private fun requestBlePermissions() {

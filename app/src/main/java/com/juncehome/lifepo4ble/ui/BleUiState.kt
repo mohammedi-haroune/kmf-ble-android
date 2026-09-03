@@ -4,6 +4,14 @@ import com.juncehome.lifepo4ble.ble.ScannedDevice
 import com.juncehome.lifepo4ble.protocol.FrameLogEntry
 import com.juncehome.lifepo4ble.protocol.KmfReading
 
+enum class AutonomousCollectionStatus {
+    NOT_CONFIGURED,
+    SETUP_IN_PROGRESS,
+    ACTIVE,
+    UNSUPPORTED,
+    ERROR,
+}
+
 data class BleUiState(
     val requiredPermissions: Set<String> = emptySet(),
     val grantedPermissions: Set<String> = emptySet(),
@@ -22,6 +30,9 @@ data class BleUiState(
     val latestReading: KmfReading = KmfReading(),
     val packetLog: List<FrameLogEntry> = emptyList(),
     val latestError: String? = null,
+    val canConfigureAutonomousCollection: Boolean = false,
+    val autonomousCollectionStatus: AutonomousCollectionStatus = AutonomousCollectionStatus.NOT_CONFIGURED,
+    val autonomousCollectionDetail: String? = null,
 ) {
     val permissionsGranted: Boolean
         get() = grantedPermissions.containsAll(requiredPermissions)

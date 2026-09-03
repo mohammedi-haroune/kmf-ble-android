@@ -80,6 +80,8 @@ fun KmfBleAppShell(
                 DashboardScreen(
                     state = state,
                     contentPadding = innerPadding,
+                    onEnableAutonomousCollection = viewModel::requestAutonomousCollection,
+                    onStopAutonomousCollection = viewModel::stopAutonomousCollection,
                 )
             }
             composable(TopLevelDestination.Live.route) {

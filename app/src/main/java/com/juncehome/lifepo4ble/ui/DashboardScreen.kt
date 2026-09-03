@@ -16,7 +16,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -35,6 +37,8 @@ import java.util.Locale
 fun DashboardScreen(
     state: BleUiState,
     contentPadding: PaddingValues,
+    onEnableAutonomousCollection: () -> Unit,
+    onStopAutonomousCollection: () -> Unit,
 ) {
     val content = buildDashboardContent(state)
 
@@ -65,7 +69,59 @@ fun DashboardScreen(
             EnergyTotalsCard(model = content.energyTotals)
         }
 
+        AutonomousCollectionCard(
+            status = state.autonomousCollectionStatus,
+            canConfigure = state.canConfigureAutonomousCollection,
+            detail = state.autonomousCollectionDetail,
+            onEnable = onEnableAutonomousCollection,
+            onStop = onStopAutonomousCollection,
+        )
         ConnectionSummaryCard(model = content.connection)
+    }
+}
+
+@Composable
+private fun AutonomousCollectionCard(
+    status: AutonomousCollectionStatus,
+    canConfigure: Boolean,
+    detail: String?,
+    onEnable: () -> Unit,
+    onStop: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Autonomous collection", style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = when (status) {
+                    AutonomousCollectionStatus.ACTIVE -> "Enabled — continues after leaving the app and normal restart."
+                    AutonomousCollectionStatus.SETUP_IN_PROGRESS -> "Waiting for Android companion approval."
+                    AutonomousCollectionStatus.UNSUPPORTED -> "Unavailable on this phone."
+                    AutonomousCollectionStatus.ERROR -> "Setup needs attention."
+                    AutonomousCollectionStatus.NOT_CONFIGURED -> "Enable once after selecting and connecting to your meter."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            detail?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            if (status == AutonomousCollectionStatus.ACTIVE) {
+                OutlinedButton(onClick = onStop) {
+                    Text("Stop autonomous collection")
+                }
+            } else {
+                Button(
+                    enabled = canConfigure && status != AutonomousCollectionStatus.SETUP_IN_PROGRESS &&
+                        status != AutonomousCollectionStatus.UNSUPPORTED,
+                    onClick = onEnable,
+                ) {
+                    Text("Enable autonomous collection")
+                }
+            }
+        }
     }
 }
 

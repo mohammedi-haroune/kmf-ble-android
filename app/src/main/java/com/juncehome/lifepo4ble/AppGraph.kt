@@ -17,6 +17,7 @@ import com.juncehome.lifepo4ble.collection.CompanionAssociationGateway
 import com.juncehome.lifepo4ble.collection.CollectionController
 import com.juncehome.lifepo4ble.collection.CollectionControllerImpl
 import com.juncehome.lifepo4ble.collection.CollectionConfiguration
+import com.juncehome.lifepo4ble.collection.AndroidCollectionServiceCommander
 import com.juncehome.lifepo4ble.data.DeviceStore
 import com.juncehome.lifepo4ble.data.KmfDatabase
 import com.juncehome.lifepo4ble.data.KmfBatteryHistoryExporter
@@ -101,6 +102,8 @@ class AppGraph(
                     deviceStore = deviceStore,
                     historyStore = historyRepository,
                     batteryHistoryExportStore = batteryHistoryExporter,
+                    companionAssociationGateway = companionAssociationGateway,
+                    collectionServiceCommander = AndroidCollectionServiceCommander(application),
                 ) as T
             }
             error("Unknown ViewModel class ${modelClass.name}")

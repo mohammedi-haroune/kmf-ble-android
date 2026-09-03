@@ -17,7 +17,7 @@ interface DeviceSnapshotStore {
 
     suspend fun save(snapshot: DeviceSnapshot)
 
-    suspend fun enableAutonomousCollection(snapshot: DeviceSnapshot, associationId: Int)
+    suspend fun enableAutonomousCollection(snapshot: DeviceSnapshot, associationId: Int?)
 
     suspend fun disableAutonomousCollection()
 
@@ -33,9 +33,8 @@ class DeviceStore(
 
     override val collectionConfiguration: Flow<CollectionConfiguration?> = dataStore.data.map { preferences ->
         val snapshot = preferences.toSnapshot() ?: return@map null
-        val associationId = preferences[ASSOCIATION_ID] ?: return@map null
         val autonomousEnabled = preferences[AUTONOMOUS_ENABLED] ?: return@map null
-        CollectionConfiguration(snapshot, associationId, autonomousEnabled)
+        CollectionConfiguration(snapshot, preferences[ASSOCIATION_ID], autonomousEnabled)
     }
 
     override suspend fun save(snapshot: DeviceSnapshot) {
@@ -44,10 +43,14 @@ class DeviceStore(
         }
     }
 
-    override suspend fun enableAutonomousCollection(snapshot: DeviceSnapshot, associationId: Int) {
+    override suspend fun enableAutonomousCollection(snapshot: DeviceSnapshot, associationId: Int?) {
         dataStore.edit { preferences ->
             preferences.setSnapshot(snapshot)
-            preferences[ASSOCIATION_ID] = associationId
+            if (associationId == null) {
+                preferences.remove(ASSOCIATION_ID)
+            } else {
+                preferences[ASSOCIATION_ID] = associationId
+            }
             preferences[AUTONOMOUS_ENABLED] = true
         }
     }

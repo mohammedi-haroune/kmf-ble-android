@@ -6,6 +6,9 @@ import com.juncehome.lifepo4ble.AppLog
 import com.juncehome.lifepo4ble.ble.BleRepositoryContract
 import com.juncehome.lifepo4ble.ble.GattProfile
 import com.juncehome.lifepo4ble.ble.ScannedDevice
+import com.juncehome.lifepo4ble.collection.CollectionServiceCommander
+import com.juncehome.lifepo4ble.collection.CollectionVisibility
+import com.juncehome.lifepo4ble.collection.CompanionAssociationGateway
 import com.juncehome.lifepo4ble.data.DeviceSnapshot
 import com.juncehome.lifepo4ble.data.DeviceSnapshotStore
 import com.juncehome.lifepo4ble.data.KmfBatterySampleEntity
@@ -15,14 +18,13 @@ import com.juncehome.lifepo4ble.data.KmfNotificationObservation
 import com.juncehome.lifepo4ble.data.KmfWriteObservation
 import com.juncehome.lifepo4ble.protocol.KmfLineParser
 import com.juncehome.lifepo4ble.ble.BleEvent
+import android.content.IntentSender
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -31,17 +33,15 @@ class BleViewModel(
     private val deviceStore: DeviceSnapshotStore,
     private val historyStore: KmfHistoryStore,
     private val batteryHistoryExportStore: KmfBatteryHistoryExportStore? = null,
+    private val companionAssociationGateway: CompanionAssociationGateway? = null,
+    private val collectionServiceCommander: CollectionServiceCommander? = null,
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val scope: CoroutineScope? = null,
-    private val reconnectDelayMs: Long = 1_000L,
 ) : ViewModel() {
     private val parser = KmfLineParser()
-    private var bootstrapJob: Job? = null
-    private var totalsPollJob: Job? = null
-    private var reconnectJob: Job? = null
-    private var recentSamplesJob: Job? = null
+    private var recentSamplesJob: kotlinx.coroutines.Job? = null
     private var recentSamplesDeviceAddress: String? = null
-    private var manualDisconnectRequested = false
+    private var pendingAssociationSnapshot: DeviceSnapshot? = null
     private val workScope: CoroutineScope
         get() = scope ?: viewModelScope
 
@@ -51,6 +51,8 @@ class BleViewModel(
     val recentBatterySamples: StateFlow<List<KmfBatterySampleEntity>> = mutableRecentBatterySamples
     private val mutableBatteryHistoryStatus = MutableStateFlow<String?>(null)
     val batteryHistoryStatus: StateFlow<String?> = mutableBatteryHistoryStatus
+    private val mutableAssociationIntentSenders = MutableSharedFlow<IntentSender>(extraBufferCapacity = 1)
+    val associationIntentSenders = mutableAssociationIntentSenders
 
     init {
         workScope.launch {
@@ -62,39 +64,33 @@ class BleViewModel(
                 syncRecentBatterySamples(nextState.selectedDevice?.address)
                 persistHistory(event, nextState, nowMs)
 
-                if (event is BleEvent.Connecting || event is BleEvent.Connected) {
-                    cancelReconnect()
-                }
-
                 if (event is BleEvent.ServicesDiscovered) {
-                    cancelReconnect()
                     saveSnapshot(nextState.selectedDevice, event.profile)
-                    startOfficialBootstrapSequence()
                 }
-
-                if (nextState.kmfBootstrapReady) {
-                    bootstrapJob?.cancel()
-                    bootstrapJob = null
-                    startTotalsPollingIfNeeded()
-                }
-
-                if (event is BleEvent.Disconnected ||
-                    event is BleEvent.Error
-                ) {
-                    cancelBackgroundWrites()
-                }
-
-                if (event is BleEvent.Disconnected) {
-                    if (manualDisconnectRequested) {
-                        manualDisconnectRequested = false
-                    } else if (shouldAutoReconnect(previousState)) {
-                        scheduleRememberedConnection("disconnect")
+            }
+        }
+        workScope.launch {
+            deviceStore.collectionConfiguration.collect { configuration ->
+                if (configuration?.autonomousEnabled == true) {
+                    mutableUiState.update {
+                        it.copy(
+                            autonomousCollectionStatus = AutonomousCollectionStatus.ACTIVE,
+                            autonomousCollectionDetail = "Background collection is enabled for ${configuration.snapshot.address}",
+                        )
+                    }
+                } else if (mutableUiState.value.autonomousCollectionStatus == AutonomousCollectionStatus.ACTIVE) {
+                    mutableUiState.update {
+                        it.copy(
+                            autonomousCollectionStatus = AutonomousCollectionStatus.NOT_CONFIGURED,
+                            autonomousCollectionDetail = null,
+                        )
                     }
                 }
-
-                if (event is BleEvent.Error && shouldAutoReconnect(previousState)) {
-                    scheduleRememberedConnection("error", requireDisconnected = false)
-                }
+            }
+        }
+        workScope.launch {
+            deviceStore.snapshot.collect { snapshot ->
+                mutableUiState.update { it.copy(canConfigureAutonomousCollection = snapshot != null) }
             }
         }
     }
@@ -116,11 +112,6 @@ class BleViewModel(
             )
         mutableUiState.value = nextState
 
-        if (!previousState.readyToScan && nextState.readyToScan) {
-            scheduleRememberedConnection("readiness", delayMs = 0L)
-        } else if (previousState.readyToScan && !nextState.readyToScan) {
-            cancelReconnect()
-        }
     }
 
     fun startScan() {
@@ -135,17 +126,12 @@ class BleViewModel(
     }
 
     fun connect(device: ScannedDevice) {
-        manualDisconnectRequested = false
-        cancelReconnect()
         workScope.launch {
             repository.connect(device, preferred = deviceStore.snapshot.first())
         }
     }
 
     fun disconnect() {
-        manualDisconnectRequested = true
-        cancelReconnect()
-        cancelBackgroundWrites()
         repository.disconnect()
     }
 
@@ -184,91 +170,105 @@ class BleViewModel(
         }
     }
 
-    private fun startOfficialBootstrapSequence() {
-        cancelBackgroundWrites()
-        bootstrapJob = workScope.launch {
-            delay(INITIAL_BOOTSTRAP_DELAY_MS)
-            repository.requestMtu(PREFERRED_MTU)
-            delay(POST_MTU_DELAY_MS)
-            repeat(MAX_BOOTSTRAP_ATTEMPTS) { attempt ->
-                if (!isActive) {
-                    return@launch
-                }
-                val state = mutableUiState.value
-                if (state.kmfBootstrapReady || state.connectionState == ConnectionState.DISCONNECTED) {
-                    return@launch
-                }
-                AppLog.d(
-                    "bootstrap loop attempt=${attempt + 1}/$MAX_BOOTSTRAP_ATTEMPTS writing ${KMF_BOOTSTRAP_REQUEST.toHexString()}",
-                    TAG,
+    fun requestAutonomousCollection() {
+        val gateway = companionAssociationGateway ?: run {
+            updateAutonomousCollectionError("Companion device setup is unavailable")
+            return
+        }
+        if (!gateway.isSupported()) {
+            mutableUiState.update {
+                it.copy(
+                    autonomousCollectionStatus = AutonomousCollectionStatus.UNSUPPORTED,
+                    autonomousCollectionDetail = "This phone cannot keep a companion meter available in the background.",
                 )
-                repository.write(KMF_BOOTSTRAP_REQUEST)
-                delay(BOOTSTRAP_RETRY_DELAY_MS)
             }
-            AppLog.w("bootstrap loop ended without observing both A and B frames", TAG)
-        }
-    }
-
-    private fun startTotalsPollingIfNeeded() {
-        if (totalsPollJob?.isActive == true) {
             return
         }
-        totalsPollJob = workScope.launch {
-            while (isActive) {
-                delay(TOTALS_POLL_INTERVAL_MS)
-                if (mutableUiState.value.connectionState == ConnectionState.DISCONNECTED) {
-                    break
-                }
-                AppLog.d("poll timer fired writing ${KMF_TOTALS_POLL.toHexString()}", TAG)
-                repository.write(KMF_TOTALS_POLL)
+        workScope.launch {
+            val snapshot = deviceStore.snapshot.first()
+            if (snapshot == null) {
+                updateAutonomousCollectionError("Connect to the selected meter once so its BLE profile can be saved.")
+                return@launch
             }
+            pendingAssociationSnapshot = snapshot
+            mutableUiState.update {
+                it.copy(
+                    autonomousCollectionStatus = AutonomousCollectionStatus.SETUP_IN_PROGRESS,
+                    autonomousCollectionDetail = "Approve the Android companion association for ${snapshot.address}.",
+                )
+            }
+            gateway.requestAssociation(
+                address = snapshot.address,
+                onPending = { sender -> mutableAssociationIntentSenders.tryEmit(sender) },
+                onFailure = { error ->
+                    pendingAssociationSnapshot = null
+                    updateAutonomousCollectionError(error.message ?: "Companion association failed")
+                },
+            )
         }
     }
 
-    private fun cancelBackgroundWrites() {
-        bootstrapJob?.cancel()
-        bootstrapJob = null
-        totalsPollJob?.cancel()
-        totalsPollJob = null
-    }
-
-    private fun scheduleRememberedConnection(
-        reason: String,
-        delayMs: Long = reconnectDelayMs,
-        requireDisconnected: Boolean = true,
-    ) {
-        if (reconnectJob?.isActive == true) {
+    /** Call only after MainActivity receives RESULT_OK from Android's association sheet. */
+    fun onAssociationCompleted(associationId: Int?) {
+        val snapshot = pendingAssociationSnapshot ?: run {
+            updateAutonomousCollectionError("Association result did not match a pending meter setup.")
             return
         }
-        reconnectJob = workScope.launch {
-            if (delayMs > 0) {
-                delay(delayMs)
-            }
-            if (manualDisconnectRequested) {
-                return@launch
-            }
-            val state = mutableUiState.value
-            if (!state.readyToScan) {
-                return@launch
-            }
-            if (requireDisconnected && state.connectionState != ConnectionState.DISCONNECTED) {
-                return@launch
-            }
-            val snapshot = deviceStore.snapshot.first() ?: return@launch
-            AppLog.d("auto connect reason=$reason address=${snapshot.address}", TAG)
-            repository.connect(snapshot.toScannedDevice(), preferred = snapshot)
-        }.also { job ->
-            job.invokeOnCompletion {
-                if (reconnectJob === job) {
-                    reconnectJob = null
+        workScope.launch {
+            try {
+                requireNotNull(companionAssociationGateway).startPresenceObservation(snapshot.address)
+                deviceStore.enableAutonomousCollection(snapshot, associationId)
+                collectionServiceCommander?.start()
+                pendingAssociationSnapshot = null
+                mutableUiState.update {
+                    it.copy(
+                        autonomousCollectionStatus = AutonomousCollectionStatus.ACTIVE,
+                        autonomousCollectionDetail = "Background collection is enabled for ${snapshot.address}",
+                    )
                 }
+            } catch (error: Throwable) {
+                pendingAssociationSnapshot = null
+                updateAutonomousCollectionError(error.message ?: "Could not start companion observation")
             }
         }
     }
 
-    private fun cancelReconnect() {
-        reconnectJob?.cancel()
-        reconnectJob = null
+    fun onAssociationCanceled() {
+        pendingAssociationSnapshot = null
+        mutableUiState.update {
+            it.copy(
+                autonomousCollectionStatus = AutonomousCollectionStatus.NOT_CONFIGURED,
+                autonomousCollectionDetail = "Companion association was canceled; background collection is not enabled.",
+            )
+        }
+    }
+
+    fun stopAutonomousCollection() {
+        workScope.launch {
+            val configuration = deviceStore.collectionConfiguration.first()
+            try {
+                configuration?.let { companionAssociationGateway?.stopPresenceObservation(it.snapshot.address) }
+            } catch (error: Throwable) {
+                AppLog.e("failed to stop companion presence observation", error, TAG)
+            }
+            deviceStore.disableAutonomousCollection()
+            collectionServiceCommander?.stop()
+        }
+    }
+
+    fun onAppVisibilityChanged(visibility: CollectionVisibility) {
+        if (mutableUiState.value.autonomousCollectionStatus == AutonomousCollectionStatus.ACTIVE) {
+            collectionServiceCommander?.setVisibility(visibility)
+        }
+    }
+
+    private fun updateAutonomousCollectionError(detail: String) {
+        mutableUiState.update {
+            it.copy(
+                autonomousCollectionStatus = AutonomousCollectionStatus.ERROR,
+                autonomousCollectionDetail = detail,
+            )
+        }
     }
 
     private fun syncRecentBatterySamples(deviceAddress: String?) {
@@ -364,25 +364,6 @@ class BleViewModel(
 
     private companion object {
         const val TAG = "KMF-BLE"
-        const val PREFERRED_MTU = 100
-        const val INITIAL_BOOTSTRAP_DELAY_MS = 1_000L
-        const val POST_MTU_DELAY_MS = 500L
-        const val BOOTSTRAP_RETRY_DELAY_MS = 2_000L
-        const val MAX_BOOTSTRAP_ATTEMPTS = 15
-        const val TOTALS_POLL_INTERVAL_MS = 30_000L
         const val LIVE_SAMPLE_LIMIT = 2_048
-        val KMF_BOOTSTRAP_REQUEST = byteArrayOf(0x3A, 0x2A)
-        val KMF_TOTALS_POLL = byteArrayOf(0x3A, 0x43, 0x0A)
     }
 }
-
-private fun DeviceSnapshot.toScannedDevice(): ScannedDevice =
-    ScannedDevice(
-        name = name,
-        address = address,
-        rssi = 0,
-        serviceUuids = emptyList(),
-    )
-
-private fun ByteArray.toHexString(): String =
-    joinToString(separator = " ") { "%02X".format(it.toInt() and 0xFF) }

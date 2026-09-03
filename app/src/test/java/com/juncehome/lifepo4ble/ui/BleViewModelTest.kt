@@ -5,6 +5,8 @@ import com.juncehome.lifepo4ble.ble.BleRepositoryContract
 import com.juncehome.lifepo4ble.ble.GattProfile
 import com.juncehome.lifepo4ble.ble.ScannedDevice
 import com.juncehome.lifepo4ble.collection.CollectionConfiguration
+import com.juncehome.lifepo4ble.collection.CollectionServiceCommander
+import com.juncehome.lifepo4ble.collection.CompanionAssociationGateway
 import com.juncehome.lifepo4ble.data.DeviceSnapshot
 import com.juncehome.lifepo4ble.data.DeviceSnapshotStore
 import com.juncehome.lifepo4ble.data.KmfBatterySampleEntity
@@ -20,14 +22,105 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class BleViewModelTest {
+    @Test
+    fun completedLegacyAssociationPersistsConfigurationStartsPresenceAndStartsService() = runTest {
+        val snapshot = configuredSnapshot()
+        val store = FakeDeviceStore(initial = snapshot)
+        val gateway = FakeCompanionAssociationGateway()
+        val serviceCommander = FakeCollectionServiceCommander()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = BleViewModel(
+            repository = FakeBleRepository(),
+            deviceStore = store,
+            historyStore = FakeHistoryStore(),
+            companionAssociationGateway = gateway,
+            collectionServiceCommander = serviceCommander,
+            scope = viewModelScope,
+        )
+
+        try {
+            viewModel.requestAutonomousCollection()
+            advanceUntilIdle()
+            viewModel.onAssociationCompleted(associationId = null)
+            advanceUntilIdle()
+
+            assertEquals(CollectionConfiguration(snapshot, null, true), store.collectionConfiguration.first())
+            assertEquals(listOf(snapshot.address), gateway.observedAddresses)
+            assertEquals(listOf("start"), serviceCommander.commands)
+            assertEquals(AutonomousCollectionStatus.ACTIVE, viewModel.uiState.value.autonomousCollectionStatus)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun canceledAssociationDoesNotPersistOrStartService() = runTest {
+        val snapshot = configuredSnapshot()
+        val store = FakeDeviceStore(initial = snapshot)
+        val serviceCommander = FakeCollectionServiceCommander()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = BleViewModel(
+            repository = FakeBleRepository(),
+            deviceStore = store,
+            historyStore = FakeHistoryStore(),
+            companionAssociationGateway = FakeCompanionAssociationGateway(),
+            collectionServiceCommander = serviceCommander,
+            scope = viewModelScope,
+        )
+
+        try {
+            viewModel.requestAutonomousCollection()
+            advanceUntilIdle()
+            viewModel.onAssociationCanceled()
+            advanceUntilIdle()
+
+            assertNull(store.collectionConfiguration.first())
+            assertEquals(emptyList<String>(), serviceCommander.commands)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun stopDisablesConfigurationBeforeStoppingService() = runTest {
+        val snapshot = configuredSnapshot()
+        val store = FakeDeviceStore(initial = snapshot).apply {
+            enableAutonomousCollection(snapshot, 42)
+        }
+        val gateway = FakeCompanionAssociationGateway()
+        val serviceCommander = FakeCollectionServiceCommander(store.operationLog)
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = BleViewModel(
+            repository = FakeBleRepository(),
+            deviceStore = store,
+            historyStore = FakeHistoryStore(),
+            companionAssociationGateway = gateway,
+            collectionServiceCommander = serviceCommander,
+            scope = viewModelScope,
+        )
+
+        try {
+            viewModel.stopAutonomousCollection()
+            advanceUntilIdle()
+
+            assertNull(store.collectionConfiguration.first())
+            assertEquals(listOf("disable", "stop"), store.operationLog)
+            assertEquals(listOf(snapshot.address), gateway.stoppedObservedAddresses)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
     @Test
     fun connectSavesSuccessfulProfileAndKeepsLogBounded() = runTest {
         val repo = FakeBleRepository()
@@ -66,7 +159,7 @@ class BleViewModelTest {
     }
 
     @Test
-    fun readyReadinessAutoConnectsRememberedDevice() = runTest {
+    fun readinessDoesNotStartAUiOwnedCollectionLoop() = runTest {
         val repo = FakeBleRepository()
         val remembered = DeviceSnapshot(
             address = "AA:BB:CC:DD:EE:FF",
@@ -84,7 +177,6 @@ class BleViewModelTest {
             historyStore,
             clock = { 1L },
             scope = viewModelScope,
-            reconnectDelayMs = 0L,
         )
 
         try {
@@ -98,17 +190,14 @@ class BleViewModelTest {
             )
             advanceUntilIdle()
 
-            assertEquals(1, repo.connectCalls.size)
-            assertEquals(remembered.address, repo.connectCalls.single().first.address)
-            assertEquals(remembered.name, repo.connectCalls.single().first.name)
-            assertEquals(remembered, repo.connectCalls.single().second)
+            assertEquals(emptyList<Pair<ScannedDevice, DeviceSnapshot?>>(), repo.connectCalls)
         } finally {
             viewModelScope.cancel()
         }
     }
 
     @Test
-    fun unexpectedDisconnectAutoReconnectsRememberedDeviceButManualDisconnectDoesNot() = runTest {
+    fun disconnectDoesNotStartAUiOwnedReconnectLoop() = runTest {
         val repo = FakeBleRepository()
         val remembered = DeviceSnapshot(
             address = "AA:BB:CC:DD:EE:FF",
@@ -126,7 +215,6 @@ class BleViewModelTest {
             historyStore,
             clock = { 2L },
             scope = viewModelScope,
-            reconnectDelayMs = 0L,
         )
 
         try {
@@ -139,17 +227,20 @@ class BleViewModelTest {
                 bluetoothEnabled = true,
             )
             advanceUntilIdle()
-            repo.events.emit(BleEvent.Connecting(repo.connectCalls.last().first))
+            val device = ScannedDevice("KMF", remembered.address, -55, emptyList())
+            viewModel.connect(device)
+            advanceUntilIdle()
+            repo.events.emit(BleEvent.Connecting(device))
             repo.events.emit(BleEvent.Disconnected("signal lost"))
             advanceUntilIdle()
 
-            assertEquals(2, repo.connectCalls.size)
+            assertEquals(1, repo.connectCalls.size)
 
             viewModel.disconnect()
             repo.events.emit(BleEvent.Disconnected("manual"))
             advanceUntilIdle()
 
-            assertEquals(2, repo.connectCalls.size)
+            assertEquals(1, repo.connectCalls.size)
             assertEquals(1, repo.disconnectCalls)
         } finally {
             viewModelScope.cancel()
@@ -157,7 +248,7 @@ class BleViewModelTest {
     }
 
     @Test
-    fun connectionErrorAutoReconnectsRememberedDevice() = runTest {
+    fun connectionErrorDoesNotStartAUiOwnedReconnectLoop() = runTest {
         val repo = FakeBleRepository()
         val remembered = DeviceSnapshot(
             address = "AA:BB:CC:DD:EE:FF",
@@ -175,7 +266,6 @@ class BleViewModelTest {
             historyStore,
             clock = { 3L },
             scope = viewModelScope,
-            reconnectDelayMs = 0L,
         )
 
         try {
@@ -188,12 +278,14 @@ class BleViewModelTest {
                 bluetoothEnabled = true,
             )
             advanceUntilIdle()
-            repo.events.emit(BleEvent.Connecting(repo.connectCalls.last().first))
+            val device = ScannedDevice("KMF", remembered.address, -55, emptyList())
+            viewModel.connect(device)
+            advanceUntilIdle()
+            repo.events.emit(BleEvent.Connecting(device))
             repo.events.emit(BleEvent.Error("connect failed"))
             advanceUntilIdle()
 
-            assertEquals(2, repo.connectCalls.size)
-            assertEquals(remembered, repo.connectCalls.last().second)
+            assertEquals(1, repo.connectCalls.size)
         } finally {
             viewModelScope.cancel()
         }
@@ -343,12 +435,15 @@ class BleViewModelTest {
             snapshots.value = snapshot
         }
 
-        override suspend fun enableAutonomousCollection(snapshot: DeviceSnapshot, associationId: Int) {
+        val operationLog = mutableListOf<String>()
+
+        override suspend fun enableAutonomousCollection(snapshot: DeviceSnapshot, associationId: Int?) {
             save(snapshot)
             configurations.value = CollectionConfiguration(snapshot, associationId, true)
         }
 
         override suspend fun disableAutonomousCollection() {
+            operationLog += "disable"
             configurations.value = null
         }
 
@@ -358,6 +453,54 @@ class BleViewModelTest {
             configurations.value = null
         }
     }
+
+    private class FakeCompanionAssociationGateway : CompanionAssociationGateway {
+        val observedAddresses = mutableListOf<String>()
+        val stoppedObservedAddresses = mutableListOf<String>()
+
+        override fun isSupported(): Boolean = true
+
+        override fun requestAssociation(
+            address: String,
+            onPending: (android.content.IntentSender) -> Unit,
+            onFailure: (Throwable) -> Unit,
+        ) = Unit
+
+        override fun associationIdFromResult(successfulResultData: android.content.Intent): Int? = null
+
+        override fun startPresenceObservation(address: String) {
+            observedAddresses += address
+        }
+
+        override fun stopPresenceObservation(address: String) {
+            stoppedObservedAddresses += address
+        }
+    }
+
+    private class FakeCollectionServiceCommander(
+        private val operationLog: MutableList<String>? = null,
+    ) : CollectionServiceCommander {
+        val commands = mutableListOf<String>()
+
+        override fun start() {
+            commands += "start"
+        }
+
+        override fun stop() {
+            operationLog?.add("stop")
+            commands += "stop"
+        }
+
+        override fun setVisibility(visibility: com.juncehome.lifepo4ble.collection.CollectionVisibility) = Unit
+    }
+
+    private fun configuredSnapshot(): DeviceSnapshot = DeviceSnapshot(
+        address = "AA:BB:CC:DD:EE:FF",
+        name = "KMF",
+        serviceUuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        notifyUuid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        writeUuid = "cccccccc-cccc-cccc-cccc-cccccccccccc",
+    )
 
     private class FakeHistoryStore : KmfHistoryStore {
         val resetSessions = mutableListOf<String>()
