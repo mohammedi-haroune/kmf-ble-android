@@ -2,6 +2,7 @@ package com.juncehome.lifepo4ble.collection
 
 import android.companion.AssociationInfo
 import android.companion.CompanionDeviceService
+import android.companion.CompanionDeviceManager
 import android.companion.DevicePresenceEvent
 import android.content.Intent
 import android.os.Build
@@ -34,23 +35,45 @@ class KmfCompanionDeviceService : CompanionDeviceService() {
         when (event.event) {
             DevicePresenceEvent.EVENT_BLE_APPEARED,
             DevicePresenceEvent.EVENT_BT_CONNECTED,
-            -> forwardSavedAddress(CollectionServiceAction.DEVICE_APPEARED)
+            -> forwardSavedAddress(CollectionServiceAction.DEVICE_APPEARED, event.associationId)
 
             DevicePresenceEvent.EVENT_BLE_DISAPPEARED,
             DevicePresenceEvent.EVENT_BT_DISCONNECTED,
-            -> forwardSavedAddress(CollectionServiceAction.DEVICE_DISAPPEARED)
+            -> forwardSavedAddress(CollectionServiceAction.DEVICE_DISAPPEARED, event.associationId)
 
             else -> AppLog.d("companion ignored presence event=${event.event}", TAG)
         }
     }
 
-    private fun forwardSavedAddress(action: String) {
+    private fun forwardSavedAddress(action: String, eventAssociationId: Int) {
         CoroutineScope(Dispatchers.IO).launch {
             val configuration = (application as BleApplication).graph.collectionConfiguration.first()
-            if (configuration?.autonomousEnabled == true) {
+                ?: run {
+                    AppLog.d("companion ignored $action without saved configuration", TAG)
+                    return@launch
+                }
+            val associations = requireNotNull(
+                getSystemService(CompanionDeviceManager::class.java),
+            ).myAssociations.map { association ->
+                CompanionPresenceAssociation(
+                    id = association.id,
+                    address = association.deviceMacAddress?.toString(),
+                )
+            }
+            if (
+                AutonomousRestorePolicy.shouldForwardApi36PresenceEvent(
+                    configuration = configuration,
+                    eventAssociationId = eventAssociationId,
+                    associations = associations,
+                )
+            ) {
                 forward(action, configuration.snapshot.address)
             } else {
-                AppLog.d("companion ignored $action without autonomous configuration", TAG)
+                AppLog.d(
+                    "companion ignored $action eventAssociationId=$eventAssociationId " +
+                        "because it did not match the saved address association",
+                    TAG,
+                )
             }
         }
     }
