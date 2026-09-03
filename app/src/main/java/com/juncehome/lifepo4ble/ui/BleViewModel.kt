@@ -43,6 +43,7 @@ class BleViewModel(
     private var recentSamplesJob: kotlinx.coroutines.Job? = null
     private var recentSamplesDeviceAddress: String? = null
     private var pendingAssociationSnapshot: DeviceSnapshot? = null
+    private var associationCompletionStarted = false
     private var autonomousCollectionConfigured = false
     private var collectionConfigurationState = CollectionConfigurationState.UNKNOWN
     private var awaitingAutonomousPermissions = false
@@ -241,12 +242,17 @@ class BleViewModel(
         }
     }
 
-    /** Call only after MainActivity receives RESULT_OK from Android's association sheet. */
+    /** Handles either Android's direct association callback or a successful association-sheet result. */
     fun onAssociationCompleted(associationId: Int?) {
-        val snapshot = pendingAssociationSnapshot ?: run {
-            updateAutonomousCollectionError("Association result did not match a pending meter setup.")
+        if (associationCompletionStarted || autonomousCollectionConfigured) {
+            AppLog.d("CDM setup: duplicate association success ignored", TAG)
             return
         }
+        val snapshot = pendingAssociationSnapshot ?: run {
+            AppLog.w("CDM setup: association success without pending setup ignored", TAG)
+            return
+        }
+        associationCompletionStarted = true
         workScope.launch {
             try {
                 requireNotNull(companionAssociationGateway).startPresenceObservation(snapshot.address)
@@ -264,6 +270,7 @@ class BleViewModel(
                     )
                 }
             } catch (error: Throwable) {
+                associationCompletionStarted = false
                 pendingAssociationSnapshot = null
                 updateAutonomousCollectionError(error.message ?: "Could not start companion observation")
             }
@@ -271,6 +278,10 @@ class BleViewModel(
     }
 
     fun onAssociationCanceled(detail: String = "Companion association was canceled; background collection is not enabled.") {
+        if (associationCompletionStarted || autonomousCollectionConfigured) {
+            AppLog.d("CDM setup: duplicate association cancellation ignored", TAG)
+            return
+        }
         AppLog.w("CDM association terminal result: $detail", TAG)
         pendingAssociationSnapshot = null
         mutableUiState.update {
@@ -355,6 +366,7 @@ class BleViewModel(
     ) {
         AppLog.d("CDM setup: requesting association for saved meter profile", TAG)
         pendingAssociationSnapshot = snapshot
+        associationCompletionStarted = false
         mutableUiState.update {
             it.copy(
                 autonomousCollectionStatus = AutonomousCollectionStatus.SETUP_IN_PROGRESS,
@@ -371,7 +383,12 @@ class BleViewModel(
                     updateAutonomousCollectionError("Android companion setup could not be displayed because the activity was not ready.")
                 }
             },
+            onAssociationCreated = ::onAssociationCompleted,
             onFailure = { error ->
+                if (associationCompletionStarted || autonomousCollectionConfigured) {
+                    AppLog.d("CDM setup: duplicate association failure ignored", TAG)
+                    return@requestAssociation
+                }
                 pendingAssociationSnapshot = null
                 AppLog.e("CDM setup: gateway terminal failure", error, TAG)
                 updateAutonomousCollectionError(error.message ?: "Companion association failed")

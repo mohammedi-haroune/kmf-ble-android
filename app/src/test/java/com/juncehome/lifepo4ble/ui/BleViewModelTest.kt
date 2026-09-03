@@ -74,6 +74,40 @@ class BleViewModelTest {
     }
 
     @Test
+    fun directAssociationCreatedPersistsConfigurationOnlyOnceWhenActivityAlsoReturnsSuccess() = runTest {
+        val snapshot = configuredSnapshot()
+        val store = FakeDeviceStore(initial = snapshot)
+        val gateway = FakeCompanionAssociationGateway()
+        val serviceCommander = FakeCollectionServiceCommander()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = BleViewModel(
+            repository = FakeBleRepository(),
+            deviceStore = store,
+            historyStore = FakeHistoryStore(),
+            companionAssociationGateway = gateway,
+            collectionServiceCommander = serviceCommander,
+            scope = viewModelScope,
+        )
+
+        try {
+            viewModel.requestAutonomousCollection()
+            advanceUntilIdle()
+
+            gateway.completeAssociationDirectly(37)
+            advanceUntilIdle()
+            viewModel.onAssociationCompleted(37)
+            advanceUntilIdle()
+
+            assertEquals(CollectionConfiguration(snapshot, 37, true), store.collectionConfiguration.first())
+            assertEquals(listOf(snapshot.address), gateway.observedAddresses)
+            assertEquals(listOf("start"), serviceCommander.commands)
+            assertEquals(AutonomousCollectionStatus.CONFIGURED, viewModel.uiState.value.autonomousCollectionStatus)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
     fun canceledAssociationDoesNotPersistOrStartService() = runTest {
         val snapshot = configuredSnapshot()
         val store = FakeDeviceStore(initial = snapshot)
@@ -658,15 +692,22 @@ class BleViewModelTest {
         val observedAddresses = mutableListOf<String>()
         val stoppedObservedAddresses = mutableListOf<String>()
         val associationRequests = mutableListOf<String>()
+        private var onAssociationCreated: ((Int) -> Unit)? = null
 
         override fun isSupported(): Boolean = true
 
         override fun requestAssociation(
             address: String,
             onPending: (android.content.IntentSender) -> Unit,
+            onAssociationCreated: (Int) -> Unit,
             onFailure: (Throwable) -> Unit,
         ) {
             associationRequests += address
+            this.onAssociationCreated = onAssociationCreated
+        }
+
+        fun completeAssociationDirectly(associationId: Int) {
+            checkNotNull(onAssociationCreated).invoke(associationId)
         }
 
         override fun associationIdFromResult(successfulResultData: android.content.Intent): Int? = null

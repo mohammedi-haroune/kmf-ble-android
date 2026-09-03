@@ -7,7 +7,7 @@ Native Android BLE utility for a KMF LiFePO4 meter.
 - Kotlin + Jetpack Compose.
 - BLE-only foreground app.
 - Scans, connects, discovers a safe notify/write GATT profile, enables CCCD notifications, logs packets, parses `A=` and `C=` KMF frames, and polls totals with `:C\n`.
-- No MQTT, sockets, Wi-Fi setup, cloud sync, background service, or Flutter.
+- No MQTT, sockets, Wi-Fi setup, cloud sync, or Flutter.
 
 ## Android Requirements
 
@@ -17,6 +17,28 @@ Native Android BLE utility for a KMF LiFePO4 meter.
 - API 24-30 runtime permission: fine location for BLE scanning.
 - API 31+ runtime permissions: Bluetooth scan and Bluetooth connect.
 - The manifest currently uses `BLUETOOTH_SCAN` with `neverForLocation`; validate this with a real meter before production use.
+
+## Autonomous collection (Android 12+)
+
+After one mandatory setup, the app can collect from one selected meter when its
+activity is backgrounded or removed from Recents. Setup requires Bluetooth and
+notification permission grants, a stable meter address (or an address Android
+can resolve after bonding), and approval of the Android companion-device
+association sheet. This autonomous wake guarantee requires API 31+ and a device
+with `FEATURE_COMPANION_DEVICE_SETUP`.
+
+Collection runs as a visible `connectedDevice` foreground service. Once KMF
+startup is ready, it polls every five minutes in the background and every 30
+seconds while the activity is visible. Use the notification **Stop** action to
+disable it. An ordinary Recents swipe is supported; Android Active Apps **Stop**
+and Settings force-stop are deliberately unsupported because Android prevents
+the package from restarting itself afterwards.
+
+On 2026-09-03, a physical Android 14 validation completed the association and
+Recents-removal path: the configured foreground collector stayed running after
+its task card was swiped away and wrote a later battery sample. Meter identity
+and readings are intentionally not recorded here. Reboot restoration,
+out-of-range appearance recovery, and notification Stop remain unvalidated.
 
 ## Development
 

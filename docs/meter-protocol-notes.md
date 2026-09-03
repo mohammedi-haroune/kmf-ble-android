@@ -1,42 +1,49 @@
 # KMF BLE Meter Notes
 
-## Validation Status
+## Autonomous-collection support boundary
 
-- Date: 2026-07-08
-- Result: physical validation completed
-- Evidence: on Android device `CPH2399` running Android 14, the app discovered `KMF271158`, connected, enabled CCCD notifications, parsed live `A=` and `C=` frames, wrote `:C\n`, and passed disconnect/reconnect plus relaunch-and-reconnect checks.
+- One mandatory setup is required: grant Bluetooth and notification permissions,
+  select one meter, and approve Android's companion-device association sheet.
+- The autonomous presence-wake guarantee requires Android API 31+ and
+  `FEATURE_COMPANION_DEVICE_SETUP`.
+- The selected meter must keep a stable address, or use an address Android can
+  resolve after bonding.
+- An ordinary Recents swipe is a supported design path: the collection service
+  is declared to remain running and reconnect when Android reports the
+  companion meter present.
+- Android Active Apps **Stop** and Settings force-stop are unsupported. Android
+  places the package in a stopped state, so the app cannot restart itself until
+  the user starts it again.
 
-## Device
+## 2026-09-03 device evidence
 
-- Meter label: KMF271158
-- Advertised name: KMF271158
-- MAC address: redacted
-- Android device: CPH2399
-- Android version: 14
+- An authorized, unlocked Android device accepted the debug APK and launched
+  the app successfully; the process remained running and no launch crash was
+  observed.
+- The dashboard displayed populated live voltage, current, remaining capacity,
+  total capacity, and state-of-charge values.
+- App-owned `KMF-BLE` logs recorded scan, GATT connection, notification
+  enablement, MTU 100, `:*` startup, and parsed A/B/C protocol frames.
+- The user completed the one-time companion association and the dashboard then
+  reported autonomous collection as configured. Android showed the collector as
+  a `connectedDevice` foreground service with an ongoing private notification
+  that exposed its Stop action.
+- After the app card was removed from ordinary Recents, Recents no longer
+  contained the task while the collector process and its notification remained.
+  The app recorded task removal followed by further GATT notifications, a
+  merged reading, and a newer persisted battery sample. This verifies normal
+  Recents removal, not Android Active Apps Stop or Settings force-stop.
 
-## Discovery
+## Autonomous physical-validation status
 
-- `neverForLocation` scan found meter: yes
-- Selected service UUID: `4fafc201-1fb5-459e-8fcc-c5c9c331914b`
-- Selected notify UUID: `beb5483e-36e1-4688-b7f5-ea07361b26a8`
-- Selected write UUID: `beb5483e-36e1-4688-b7f5-ea07361b26a8`
-- Notify and write same characteristic: yes
+The following checks remain unvalidated and are not passing validation
+evidence:
 
-## Notifications
+- companion disappearance/reappearance recovery;
+- reboot restoration without opening the activity; and
+- notification Stop preventing reconnect.
 
-```text
-redacted sample A line: :A=1327,950,0,6635,1
-redacted sample C line: :C=1820,474,0,0,0,0,
-```
-
-## Polling
-
-- Outbound poll bytes: `3A 43 0A`
-- Poll interval observed: approximately 30 seconds
-- First response latency: approximately 100-120 ms from logged `:C\n` write to first `C=` notification
-
-## Failures
-
-- Permission issues: none observed; permissions were already granted on the validation device
-- Disconnect behavior: manual disconnect succeeded; reconnect succeeded; after force-stop and relaunch the app resumed in a disconnected state and recovered after rescan/reconnect with the saved profile
-- Write failures: none observed for `:C\n` during validation
+Android Active Apps **Stop** and Settings force-stop remain intentionally
+unsupported, rather than untested supported behavior. No meter address,
+advertised name, GATT identifier, raw battery reading, or other device-specific
+observation is retained in this committed document.

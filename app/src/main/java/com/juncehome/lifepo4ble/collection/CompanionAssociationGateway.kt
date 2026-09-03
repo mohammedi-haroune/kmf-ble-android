@@ -21,6 +21,7 @@ interface CompanionAssociationGateway {
     fun requestAssociation(
         address: String,
         onPending: (IntentSender) -> Unit,
+        onAssociationCreated: (Int) -> Unit,
         onFailure: (Throwable) -> Unit,
     )
 
@@ -41,6 +42,34 @@ data class CompanionAssociationFilter(
     val transport: CompanionAssociationTransport,
     val address: String,
 )
+
+/**
+ * Delivers the one terminal result for a companion-association request.
+ *
+ * Android 13+ can create an association without first presenting a chooser, while Android 16
+ * invokes both failure overloads for one unsuccessful request. Keeping that platform callback
+ * contract here prevents duplicate configuration or terminal UI updates at the app boundary.
+ */
+class CompanionAssociationCallbackPolicy(
+    onCreated: (Int) -> Unit,
+    onFailure: (Throwable) -> Unit,
+) {
+    private val createdCallback = onCreated
+    private val failureCallback = onFailure
+    private var terminalDelivered = false
+
+    fun onAssociationCreated(associationId: Int) {
+        if (terminalDelivered) return
+        terminalDelivered = true
+        createdCallback(associationId)
+    }
+
+    fun onFailure(error: Throwable) {
+        if (terminalDelivered) return
+        terminalDelivered = true
+        failureCallback(error)
+    }
+}
 
 object CompanionAssociationPolicy {
     fun canConfigure(apiLevel: Int, hasFeature: Boolean): Boolean = apiLevel >= 31 && hasFeature
@@ -81,6 +110,7 @@ class AndroidCompanionAssociationGateway(
     override fun requestAssociation(
         address: String,
         onPending: (IntentSender) -> Unit,
+        onAssociationCreated: (Int) -> Unit,
         onFailure: (Throwable) -> Unit,
     ) {
         if (!isSupported()) {
@@ -94,6 +124,10 @@ class AndroidCompanionAssociationGateway(
             .addDeviceFilter(leDeviceFilter(filter))
             .setSingleDevice(true)
             .build()
+        val callbacks = CompanionAssociationCallbackPolicy(
+            onCreated = onAssociationCreated,
+            onFailure = onFailure,
+        )
 
         try {
             AppLog.d("CDM association request submitted: api=${Build.VERSION.SDK_INT}, filter=bluetooth-le-address")
@@ -113,25 +147,24 @@ class AndroidCompanionAssociationGateway(
 
                     override fun onAssociationCreated(associationInfo: android.companion.AssociationInfo) {
                         AppLog.d("CDM association created: id=${associationInfo.id}")
+                        callbacks.onAssociationCreated(associationInfo.id)
                     }
 
                     override fun onFailure(error: CharSequence?) {
-                        val detail = error?.toString() ?: "Companion association failed"
-                        AppLog.e("CDM association failed: detail=$detail")
-                        onFailure(IllegalStateException(detail))
+                        AppLog.w("CDM association failed; platform detail redacted")
+                        callbacks.onFailure(CompanionAssociationRequestException())
                     }
 
                     override fun onFailure(errorCode: Int, error: CharSequence?) {
-                        val detail = error?.toString() ?: "Companion association failed"
-                        AppLog.e("CDM association failed: code=$errorCode detail=$detail")
-                        onFailure(IllegalStateException("Companion association failed (code=$errorCode): $detail"))
+                        AppLog.w("CDM association failed: code=$errorCode; platform detail redacted")
+                        callbacks.onFailure(CompanionAssociationRequestException(errorCode))
                     }
                 },
                 callbackHandler,
             )
         } catch (error: Throwable) {
-            AppLog.e("CDM association request threw before callback", error)
-            onFailure(error)
+            AppLog.e("CDM association request threw before callback; exception detail redacted")
+            callbacks.onFailure(CompanionAssociationRequestException())
         }
     }
 
@@ -193,3 +226,9 @@ class AndroidCompanionAssociationGateway(
             .build()
     }
 }
+
+private class CompanionAssociationRequestException(
+    errorCode: Int? = null,
+) : IllegalStateException(
+    if (errorCode == null) "Companion association failed" else "Companion association failed (code=$errorCode)",
+)
