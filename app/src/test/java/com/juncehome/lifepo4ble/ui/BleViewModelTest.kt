@@ -492,6 +492,52 @@ class BleViewModelTest {
     }
 
     @Test
+    fun manualTransportIsBlockedUntilTheInitialConfigurationIsExplicitlyUnconfigured() = runTest {
+        val snapshot = configuredSnapshot()
+        val delayedConfigurations = MutableSharedFlow<CollectionConfiguration?>(extraBufferCapacity = 1)
+        val repository = FakeBleRepository()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = BleViewModel(
+            repository = repository,
+            deviceStore = FakeDeviceStore(initial = snapshot, configurationFlow = delayedConfigurations),
+            historyStore = FakeHistoryStore(),
+            scope = viewModelScope,
+        )
+        val device = ScannedDevice(snapshot.name, snapshot.address, -55, emptyList())
+
+        try {
+            runCurrent()
+            viewModel.startScan()
+            viewModel.stopScan()
+            viewModel.connect(device)
+            viewModel.disconnect()
+            runCurrent()
+
+            assertEquals(0, repository.startScanCalls)
+            assertEquals(0, repository.stopScanCalls)
+            assertEquals(emptyList<Pair<ScannedDevice, DeviceSnapshot?>>(), repository.connectCalls)
+            assertEquals(0, repository.disconnectCalls)
+            assertEquals(false, viewModel.uiState.value.manualTransportControlsEnabled)
+
+            delayedConfigurations.emit(null)
+            runCurrent()
+            viewModel.startScan()
+            viewModel.stopScan()
+            viewModel.connect(device)
+            viewModel.disconnect()
+            runCurrent()
+
+            assertEquals(1, repository.startScanCalls)
+            assertEquals(1, repository.stopScanCalls)
+            assertEquals(listOf(device to snapshot), repository.connectCalls)
+            assertEquals(1, repository.disconnectCalls)
+            assertEquals(true, viewModel.uiState.value.manualTransportControlsEnabled)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
     fun missingRuntimePermissionsRequestGrantBeforeCompanionAssociation() = runTest {
         val snapshot = configuredSnapshot()
         val store = FakeDeviceStore(initial = snapshot)

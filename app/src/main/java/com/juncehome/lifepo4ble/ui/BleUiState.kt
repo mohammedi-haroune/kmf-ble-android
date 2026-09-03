@@ -35,6 +35,7 @@ data class BleUiState(
     val autonomousCollectionStatus: AutonomousCollectionStatus = AutonomousCollectionStatus.NOT_CONFIGURED,
     val autonomousCollectionDetail: String? = null,
     val autonomousCollectionConfigured: Boolean = false,
+    val collectionConfigurationLoaded: Boolean = false,
 ) {
     val permissionsGranted: Boolean
         get() = grantedPermissions.containsAll(requiredPermissions)
@@ -44,4 +45,7 @@ data class BleUiState(
 
     val kmfBootstrapReady: Boolean
         get() = hasAFrame && hasBFrame
+
+    val manualTransportControlsEnabled: Boolean
+        get() = collectionConfigurationLoaded && !autonomousCollectionConfigured
 }

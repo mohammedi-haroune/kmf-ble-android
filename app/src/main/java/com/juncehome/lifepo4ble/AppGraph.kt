@@ -18,6 +18,7 @@ import com.juncehome.lifepo4ble.collection.CollectionController
 import com.juncehome.lifepo4ble.collection.CollectionControllerImpl
 import com.juncehome.lifepo4ble.collection.CollectionConfiguration
 import com.juncehome.lifepo4ble.collection.AndroidCollectionServiceCommander
+import com.juncehome.lifepo4ble.collection.AutonomousCollectionDisabler
 import com.juncehome.lifepo4ble.data.DeviceStore
 import com.juncehome.lifepo4ble.data.KmfDatabase
 import com.juncehome.lifepo4ble.data.KmfBatteryHistoryExporter
@@ -38,6 +39,10 @@ class AppGraph(
 
     val collectionConfiguration: Flow<CollectionConfiguration?>
         get() = deviceStore.collectionConfiguration
+
+    val autonomousCollectionDisabler: AutonomousCollectionDisabler by lazy {
+        AutonomousCollectionDisabler(deviceStore, companionAssociationGateway)
+    }
 
     private val bluetoothManager: BluetoothManager by lazy {
         requireNotNull(application.getSystemService(BluetoothManager::class.java))
@@ -104,6 +109,7 @@ class AppGraph(
                     batteryHistoryExportStore = batteryHistoryExporter,
                     companionAssociationGateway = companionAssociationGateway,
                     collectionServiceCommander = AndroidCollectionServiceCommander(application),
+                    autonomousCollectionDisabler = autonomousCollectionDisabler,
                 ) as T
             }
             error("Unknown ViewModel class ${modelClass.name}")

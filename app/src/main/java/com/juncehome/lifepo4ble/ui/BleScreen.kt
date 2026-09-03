@@ -46,7 +46,9 @@ fun BleScreen(
             style = MaterialTheme.typography.headlineMedium,
         )
         StatusPanel(state)
-        if (state.autonomousCollectionConfigured) {
+        if (!state.collectionConfigurationLoaded) {
+            Text("Checking whether background collection owns the BLE connection...")
+        } else if (state.autonomousCollectionConfigured) {
             Text("Autonomous collection owns the BLE connection. Stop it from Dashboard before changing transport controls.")
         }
         Controls(
@@ -56,13 +58,13 @@ fun BleScreen(
             onStopScan = onStopScan,
             onDisconnect = onDisconnect,
             onClearLog = onClearLog,
-            transportControlsEnabled = !state.autonomousCollectionConfigured,
+            transportControlsEnabled = state.manualTransportControlsEnabled,
         )
         DeviceList(
             devices = state.devices,
             selectedDevice = state.selectedDevice,
             onConnect = onConnect,
-            connectEnabled = !state.autonomousCollectionConfigured,
+            connectEnabled = state.manualTransportControlsEnabled,
         )
         ReadingPanel(reading = state.latestReading)
         PacketLogList(packetLog = state.packetLog)

@@ -9,6 +9,8 @@ import com.juncehome.lifepo4ble.ble.ScannedDevice
 import com.juncehome.lifepo4ble.collection.CollectionServiceCommander
 import com.juncehome.lifepo4ble.collection.CollectionVisibility
 import com.juncehome.lifepo4ble.collection.CompanionAssociationGateway
+import com.juncehome.lifepo4ble.collection.AutonomousCollectionDisabler
+import com.juncehome.lifepo4ble.collection.AutonomousCollectionStopper
 import com.juncehome.lifepo4ble.data.DeviceSnapshot
 import com.juncehome.lifepo4ble.data.DeviceSnapshotStore
 import com.juncehome.lifepo4ble.data.KmfBatterySampleEntity
@@ -36,6 +38,9 @@ class BleViewModel(
     private val batteryHistoryExportStore: KmfBatteryHistoryExportStore? = null,
     private val companionAssociationGateway: CompanionAssociationGateway? = null,
     private val collectionServiceCommander: CollectionServiceCommander? = null,
+    private val autonomousCollectionDisabler: AutonomousCollectionStopper? = companionAssociationGateway?.let {
+        AutonomousCollectionDisabler(deviceStore, it)
+    },
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val scope: CoroutineScope? = null,
 ) : ViewModel() {
@@ -88,20 +93,28 @@ class BleViewModel(
                             autonomousCollectionStatus = AutonomousCollectionStatus.CONFIGURED,
                             autonomousCollectionDetail = "Configured for ${configuration.snapshot.address}; the service collects when the meter is present.",
                             autonomousCollectionConfigured = true,
+                            collectionConfigurationLoaded = true,
                         )
                     }
                     collectionServiceCommander?.setVisibility(currentAppVisibility)
                 } else {
                     collectionConfigurationState = CollectionConfigurationState.UNCONFIGURED
-                    if (autonomousCollectionConfigured) {
-                        autonomousCollectionConfigured = false
-                        mutableUiState.update {
-                            it.copy(
-                                autonomousCollectionStatus = AutonomousCollectionStatus.NOT_CONFIGURED,
-                                autonomousCollectionDetail = null,
-                                autonomousCollectionConfigured = false,
-                            )
-                        }
+                    autonomousCollectionConfigured = false
+                    mutableUiState.update {
+                        it.copy(
+                            collectionConfigurationLoaded = true,
+                            autonomousCollectionStatus = if (it.autonomousCollectionConfigured) {
+                                AutonomousCollectionStatus.NOT_CONFIGURED
+                            } else {
+                                it.autonomousCollectionStatus
+                            },
+                            autonomousCollectionDetail = if (it.autonomousCollectionConfigured) {
+                                null
+                            } else {
+                                it.autonomousCollectionDetail
+                            },
+                            autonomousCollectionConfigured = false,
+                        )
                     }
                 }
             }
@@ -148,12 +161,12 @@ class BleViewModel(
     }
 
     fun startScan() {
-        if (autonomousCollectionConfigured) return
+        if (!manualTransportAllowed()) return
         repository.startScan()
     }
 
     fun stopScan() {
-        if (autonomousCollectionConfigured) return
+        if (!manualTransportAllowed()) return
         repository.stopScan()
         mutableUiState.update { state ->
             state.copy(scanning = false)
@@ -161,14 +174,14 @@ class BleViewModel(
     }
 
     fun connect(device: ScannedDevice) {
-        if (autonomousCollectionConfigured) return
+        if (!manualTransportAllowed()) return
         workScope.launch {
             repository.connect(device, preferred = deviceStore.snapshot.first())
         }
     }
 
     fun disconnect() {
-        if (autonomousCollectionConfigured) return
+        if (!manualTransportAllowed()) return
         repository.disconnect()
     }
 
@@ -294,13 +307,7 @@ class BleViewModel(
 
     fun stopAutonomousCollection() {
         workScope.launch {
-            val configuration = deviceStore.collectionConfiguration.first()
-            try {
-                configuration?.let { companionAssociationGateway?.stopPresenceObservation(it.snapshot.address) }
-            } catch (error: Throwable) {
-                AppLog.e("failed to stop companion presence observation", error, TAG)
-            }
-            deviceStore.disableAutonomousCollection()
+            autonomousCollectionDisabler?.disable() ?: deviceStore.disableAutonomousCollection()
             collectionConfigurationState = CollectionConfigurationState.UNCONFIGURED
             autonomousCollectionConfigured = false
             mutableUiState.update {
@@ -313,6 +320,9 @@ class BleViewModel(
             collectionServiceCommander?.stop()
         }
     }
+
+    private fun manualTransportAllowed(): Boolean =
+        collectionConfigurationState == CollectionConfigurationState.UNCONFIGURED
 
     fun onAppVisibilityChanged(visibility: CollectionVisibility) {
         currentAppVisibility = visibility

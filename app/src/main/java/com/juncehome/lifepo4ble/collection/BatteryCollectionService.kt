@@ -25,11 +25,15 @@ object CollectionServiceAction {
 
 class CollectionServiceCommandRouter(
     private val controller: CollectionController,
+    private val autonomousCollectionStopper: AutonomousCollectionStopper,
 ) {
-    fun route(command: CollectionServiceCommand) {
+    suspend fun route(command: CollectionServiceCommand) {
         when (command.action) {
             CollectionServiceAction.START -> Unit
-            CollectionServiceAction.STOP -> controller.stopByUser()
+            CollectionServiceAction.STOP -> {
+                autonomousCollectionStopper.disable()
+                controller.stopByUser()
+            }
             CollectionServiceAction.DEVICE_APPEARED -> {
                 command.address?.let(controller::onDeviceAppeared)
             }
@@ -75,7 +79,10 @@ class BatteryCollectionService : Service() {
     override fun onCreate() {
         super.onCreate()
         controller = (application as BleApplication).graph.createCollectionController(serviceScope)
-        commandRouter = CollectionServiceCommandRouter(controller)
+        commandRouter = CollectionServiceCommandRouter(
+            controller = controller,
+            autonomousCollectionStopper = (application as BleApplication).graph.autonomousCollectionDisabler,
+        )
         CollectionNotification.createChannel(this)
         promoteToForeground()
         serviceScope.launch {
@@ -90,7 +97,9 @@ class BatteryCollectionService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == CollectionServiceAction.STOP) {
-            commandRouter.route(CollectionServiceCommand.from(intent))
+            runBlocking(Dispatchers.IO) {
+                commandRouter.route(CollectionServiceCommand.from(intent))
+            }
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf(startId)
             return START_NOT_STICKY
@@ -110,7 +119,9 @@ class BatteryCollectionService : Service() {
             controller.start(configuration)
             startedConfiguration = configuration
         }
-        intent?.let { commandRouter.route(CollectionServiceCommand.from(it)) }
+        intent?.let {
+            runBlocking { commandRouter.route(CollectionServiceCommand.from(it)) }
+        }
         return START_STICKY
     }
 
