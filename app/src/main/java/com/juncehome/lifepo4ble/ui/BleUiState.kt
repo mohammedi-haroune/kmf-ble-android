@@ -7,7 +7,7 @@ import com.juncehome.lifepo4ble.protocol.KmfReading
 enum class AutonomousCollectionStatus {
     NOT_CONFIGURED,
     SETUP_IN_PROGRESS,
-    ACTIVE,
+    CONFIGURED,
     UNSUPPORTED,
     ERROR,
 }
@@ -28,11 +28,13 @@ data class BleUiState(
     val hasAFrame: Boolean = false,
     val hasBFrame: Boolean = false,
     val latestReading: KmfReading = KmfReading(),
+    val lastReadingTimestampMs: Long? = null,
     val packetLog: List<FrameLogEntry> = emptyList(),
     val latestError: String? = null,
     val canConfigureAutonomousCollection: Boolean = false,
     val autonomousCollectionStatus: AutonomousCollectionStatus = AutonomousCollectionStatus.NOT_CONFIGURED,
     val autonomousCollectionDetail: String? = null,
+    val autonomousCollectionConfigured: Boolean = false,
 ) {
     val permissionsGranted: Boolean
         get() = grantedPermissions.containsAll(requiredPermissions)

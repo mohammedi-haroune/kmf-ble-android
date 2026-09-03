@@ -86,10 +86,28 @@ class CollectionControllerTest {
     }
 
     @Test
-    fun foregroundReadyConnectionPollsEveryThirtySeconds() = runTest {
+    fun serviceOwnedControllerDefaultsToBackgroundFiveMinuteCadence() = runTest {
         val fixture = fixture(testScheduler)
         try {
             fixture.controller.start(configuration)
+            fixture.emitReadyAAndBFrames()
+
+            advanceTimeBy(299_999)
+            assertEquals(0, fixture.repository.countWrites(":C\n"))
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(1, fixture.repository.countWrites(":C\n"))
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test
+    fun foregroundReadyConnectionPollsEveryThirtySecondsAfterActivityVisibility() = runTest {
+        val fixture = fixture(testScheduler)
+        try {
+            fixture.controller.start(configuration)
+            fixture.controller.setVisibility(CollectionVisibility.FOREGROUND)
             fixture.emitReadyAAndBFrames()
 
             advanceTimeBy(29_999)

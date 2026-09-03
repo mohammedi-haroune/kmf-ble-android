@@ -68,6 +68,7 @@ object BleStateReducer {
                     hasAFrame = state.hasAFrame || frames.any { it is KmfFrame.A },
                     hasBFrame = state.hasBFrame || frames.any { it is KmfFrame.B },
                     latestReading = reading,
+                    lastReadingTimestampMs = nowMs,
                     packetLog = state.packetLog.plusBounded(
                         PacketFormatter.toEntry(nowMs, PacketDirection.INBOUND, event.bytes)
                     ),

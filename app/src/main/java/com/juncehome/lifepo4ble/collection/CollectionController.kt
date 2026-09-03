@@ -66,7 +66,9 @@ class CollectionControllerImpl(
     private val mutableState = MutableStateFlow(
         CollectionState(
             phase = CollectionPhase.STOPPED,
-            visibility = CollectionVisibility.FOREGROUND,
+            // A controller is created by the foreground service, which can run without an
+            // activity. Only a live activity may promote its polling cadence to foreground.
+            visibility = CollectionVisibility.BACKGROUND,
         )
     )
     override val state: StateFlow<CollectionState> = mutableState

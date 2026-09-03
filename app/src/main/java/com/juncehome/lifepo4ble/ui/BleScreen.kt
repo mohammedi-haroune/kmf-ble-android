@@ -46,6 +46,9 @@ fun BleScreen(
             style = MaterialTheme.typography.headlineMedium,
         )
         StatusPanel(state)
+        if (state.autonomousCollectionConfigured) {
+            Text("Autonomous collection owns the BLE connection. Stop it from Dashboard before changing transport controls.")
+        }
         Controls(
             state = state,
             onRequestPermissions = onRequestPermissions,
@@ -53,11 +56,13 @@ fun BleScreen(
             onStopScan = onStopScan,
             onDisconnect = onDisconnect,
             onClearLog = onClearLog,
+            transportControlsEnabled = !state.autonomousCollectionConfigured,
         )
         DeviceList(
             devices = state.devices,
             selectedDevice = state.selectedDevice,
             onConnect = onConnect,
+            connectEnabled = !state.autonomousCollectionConfigured,
         )
         ReadingPanel(reading = state.latestReading)
         PacketLogList(packetLog = state.packetLog)
@@ -72,6 +77,7 @@ private fun Controls(
     onStopScan: () -> Unit,
     onDisconnect: () -> Unit,
     onClearLog: () -> Unit,
+    transportControlsEnabled: Boolean,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(
@@ -85,19 +91,19 @@ private fun Controls(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Button(
-                enabled = state.readyToScan && !state.scanning,
+                enabled = transportControlsEnabled && state.readyToScan && !state.scanning,
                 onClick = onStartScan,
             ) {
                 Text(text = "Scan")
             }
             OutlinedButton(
-                enabled = state.scanning,
+                enabled = transportControlsEnabled && state.scanning,
                 onClick = onStopScan,
             ) {
                 Text(text = "Stop")
             }
             OutlinedButton(
-                enabled = state.connectionState != ConnectionState.DISCONNECTED,
+                enabled = transportControlsEnabled && state.connectionState != ConnectionState.DISCONNECTED,
                 onClick = onDisconnect,
             ) {
                 Text(text = "Disconnect")

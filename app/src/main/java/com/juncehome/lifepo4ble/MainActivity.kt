@@ -55,6 +55,11 @@ class MainActivity : ComponentActivity() {
                 associationLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
             }
         }
+        lifecycleScope.launch {
+            viewModel.autonomousPermissionRequests.collect {
+                requestBlePermissions()
+            }
+        }
         val startDestination = TopLevelDestination.fromRoute(
             intent?.getStringExtra(LaunchIntentExtras.EXTRA_START_DESTINATION),
         )

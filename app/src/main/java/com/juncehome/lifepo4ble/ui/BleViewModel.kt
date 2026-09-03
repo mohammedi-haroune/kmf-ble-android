@@ -17,6 +17,7 @@ import com.juncehome.lifepo4ble.data.KmfHistoryStore
 import com.juncehome.lifepo4ble.data.KmfNotificationObservation
 import com.juncehome.lifepo4ble.data.KmfWriteObservation
 import com.juncehome.lifepo4ble.protocol.KmfLineParser
+import com.juncehome.lifepo4ble.protocol.KmfReading
 import com.juncehome.lifepo4ble.ble.BleEvent
 import android.content.IntentSender
 import kotlinx.coroutines.CoroutineScope
@@ -42,6 +43,9 @@ class BleViewModel(
     private var recentSamplesJob: kotlinx.coroutines.Job? = null
     private var recentSamplesDeviceAddress: String? = null
     private var pendingAssociationSnapshot: DeviceSnapshot? = null
+    private var autonomousCollectionConfigured = false
+    private var awaitingAutonomousPermissions = false
+    private var currentAppVisibility = CollectionVisibility.BACKGROUND
     private val workScope: CoroutineScope
         get() = scope ?: viewModelScope
 
@@ -53,6 +57,8 @@ class BleViewModel(
     val batteryHistoryStatus: StateFlow<String?> = mutableBatteryHistoryStatus
     private val mutableAssociationIntentSenders = MutableSharedFlow<IntentSender>(extraBufferCapacity = 1)
     val associationIntentSenders = mutableAssociationIntentSenders
+    private val mutableAutonomousPermissionRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val autonomousPermissionRequests = mutableAutonomousPermissionRequests
 
     init {
         workScope.launch {
@@ -62,27 +68,33 @@ class BleViewModel(
                 val nextState = BleStateReducer.reduce(previousState, event, parser, nowMs)
                 mutableUiState.value = nextState
                 syncRecentBatterySamples(nextState.selectedDevice?.address)
-                persistHistory(event, nextState, nowMs)
-
-                if (event is BleEvent.ServicesDiscovered) {
-                    saveSnapshot(nextState.selectedDevice, event.profile)
+                if (!autonomousCollectionConfigured) {
+                    persistHistory(event, nextState, nowMs)
+                    if (event is BleEvent.ServicesDiscovered) {
+                        saveSnapshot(nextState.selectedDevice, event.profile)
+                    }
                 }
             }
         }
         workScope.launch {
             deviceStore.collectionConfiguration.collect { configuration ->
                 if (configuration?.autonomousEnabled == true) {
+                    autonomousCollectionConfigured = true
                     mutableUiState.update {
                         it.copy(
-                            autonomousCollectionStatus = AutonomousCollectionStatus.ACTIVE,
-                            autonomousCollectionDetail = "Background collection is enabled for ${configuration.snapshot.address}",
+                            autonomousCollectionStatus = AutonomousCollectionStatus.CONFIGURED,
+                            autonomousCollectionDetail = "Configured for ${configuration.snapshot.address}; the service collects when the meter is present.",
+                            autonomousCollectionConfigured = true,
                         )
                     }
-                } else if (mutableUiState.value.autonomousCollectionStatus == AutonomousCollectionStatus.ACTIVE) {
+                    collectionServiceCommander?.setVisibility(currentAppVisibility)
+                } else if (autonomousCollectionConfigured) {
+                    autonomousCollectionConfigured = false
                     mutableUiState.update {
                         it.copy(
                             autonomousCollectionStatus = AutonomousCollectionStatus.NOT_CONFIGURED,
                             autonomousCollectionDetail = null,
+                            autonomousCollectionConfigured = false,
                         )
                     }
                 }
@@ -90,7 +102,13 @@ class BleViewModel(
         }
         workScope.launch {
             deviceStore.snapshot.collect { snapshot ->
-                mutableUiState.update { it.copy(canConfigureAutonomousCollection = snapshot != null) }
+                mutableUiState.update { state ->
+                    state.copy(
+                        canConfigureAutonomousCollection = snapshot != null && state.permissionsGranted,
+                        selectedDevice = snapshot?.toScannedDevice() ?: state.selectedDevice,
+                    )
+                }
+                syncRecentBatterySamples(snapshot?.address)
             }
         }
     }
@@ -104,21 +122,32 @@ class BleViewModel(
     ) {
         val previousState = mutableUiState.value
         val nextState = previousState.copy(
-                requiredPermissions = requiredPermissions,
-                grantedPermissions = grantedPermissions,
-                hasBleFeature = hasBleFeature,
-                hasBluetoothAdapter = hasBluetoothAdapter,
-                bluetoothEnabled = bluetoothEnabled,
-            )
+            requiredPermissions = requiredPermissions,
+            grantedPermissions = grantedPermissions,
+            hasBleFeature = hasBleFeature,
+            hasBluetoothAdapter = hasBluetoothAdapter,
+            bluetoothEnabled = bluetoothEnabled,
+            canConfigureAutonomousCollection = previousState.selectedDevice != null &&
+                grantedPermissions.containsAll(requiredPermissions),
+        )
         mutableUiState.value = nextState
-
+        if (awaitingAutonomousPermissions) {
+            awaitingAutonomousPermissions = false
+            if (nextState.permissionsGranted) {
+                requestAutonomousCollection()
+            } else {
+                updateAutonomousCollectionError("BLE and notification permissions are required before companion setup.")
+            }
+        }
     }
 
     fun startScan() {
+        if (autonomousCollectionConfigured) return
         repository.startScan()
     }
 
     fun stopScan() {
+        if (autonomousCollectionConfigured) return
         repository.stopScan()
         mutableUiState.update { state ->
             state.copy(scanning = false)
@@ -126,12 +155,14 @@ class BleViewModel(
     }
 
     fun connect(device: ScannedDevice) {
+        if (autonomousCollectionConfigured) return
         workScope.launch {
             repository.connect(device, preferred = deviceStore.snapshot.first())
         }
     }
 
     fun disconnect() {
+        if (autonomousCollectionConfigured) return
         repository.disconnect()
     }
 
@@ -171,6 +202,17 @@ class BleViewModel(
     }
 
     fun requestAutonomousCollection() {
+        if (!mutableUiState.value.permissionsGranted) {
+            awaitingAutonomousPermissions = true
+            mutableUiState.update {
+                it.copy(
+                    autonomousCollectionStatus = AutonomousCollectionStatus.SETUP_IN_PROGRESS,
+                    autonomousCollectionDetail = "Grant BLE and notification permissions before Android companion setup.",
+                )
+            }
+            mutableAutonomousPermissionRequests.tryEmit(Unit)
+            return
+        }
         val gateway = companionAssociationGateway ?: run {
             updateAutonomousCollectionError("Companion device setup is unavailable")
             return
@@ -190,21 +232,7 @@ class BleViewModel(
                 updateAutonomousCollectionError("Connect to the selected meter once so its BLE profile can be saved.")
                 return@launch
             }
-            pendingAssociationSnapshot = snapshot
-            mutableUiState.update {
-                it.copy(
-                    autonomousCollectionStatus = AutonomousCollectionStatus.SETUP_IN_PROGRESS,
-                    autonomousCollectionDetail = "Approve the Android companion association for ${snapshot.address}.",
-                )
-            }
-            gateway.requestAssociation(
-                address = snapshot.address,
-                onPending = { sender -> mutableAssociationIntentSenders.tryEmit(sender) },
-                onFailure = { error ->
-                    pendingAssociationSnapshot = null
-                    updateAutonomousCollectionError(error.message ?: "Companion association failed")
-                },
-            )
+            beginCompanionAssociation(snapshot, gateway)
         }
     }
 
@@ -218,12 +246,15 @@ class BleViewModel(
             try {
                 requireNotNull(companionAssociationGateway).startPresenceObservation(snapshot.address)
                 deviceStore.enableAutonomousCollection(snapshot, associationId)
+                autonomousCollectionConfigured = true
                 collectionServiceCommander?.start()
+                collectionServiceCommander?.setVisibility(currentAppVisibility)
                 pendingAssociationSnapshot = null
                 mutableUiState.update {
                     it.copy(
-                        autonomousCollectionStatus = AutonomousCollectionStatus.ACTIVE,
-                        autonomousCollectionDetail = "Background collection is enabled for ${snapshot.address}",
+                        autonomousCollectionStatus = AutonomousCollectionStatus.CONFIGURED,
+                        autonomousCollectionDetail = "Configured for ${snapshot.address}; the service collects when the meter is present.",
+                        autonomousCollectionConfigured = true,
                     )
                 }
             } catch (error: Throwable) {
@@ -252,12 +283,21 @@ class BleViewModel(
                 AppLog.e("failed to stop companion presence observation", error, TAG)
             }
             deviceStore.disableAutonomousCollection()
+            autonomousCollectionConfigured = false
+            mutableUiState.update {
+                it.copy(
+                    autonomousCollectionStatus = AutonomousCollectionStatus.NOT_CONFIGURED,
+                    autonomousCollectionDetail = null,
+                    autonomousCollectionConfigured = false,
+                )
+            }
             collectionServiceCommander?.stop()
         }
     }
 
     fun onAppVisibilityChanged(visibility: CollectionVisibility) {
-        if (mutableUiState.value.autonomousCollectionStatus == AutonomousCollectionStatus.ACTIVE) {
+        currentAppVisibility = visibility
+        if (autonomousCollectionConfigured) {
             collectionServiceCommander?.setVisibility(visibility)
         }
     }
@@ -287,12 +327,40 @@ class BleViewModel(
         recentSamplesJob = workScope.launch {
             historyStore.observeRecentBatterySamples(deviceAddress, LIVE_SAMPLE_LIMIT).collectLatest { samples ->
                 mutableRecentBatterySamples.value = samples
+                samples.firstOrNull()?.let { sample ->
+                    mutableUiState.update { state ->
+                        state.copy(
+                            hasAFrame = sample.hasAFrame,
+                            hasBFrame = sample.hasBFrame,
+                            latestReading = sample.toReading(),
+                            lastReadingTimestampMs = sample.timestampMs,
+                        )
+                    }
+                }
             }
         }
     }
 
-    private fun shouldAutoReconnect(state: BleUiState): Boolean =
-        state.selectedDevice != null && state.connectionState != ConnectionState.DISCONNECTED
+    private fun beginCompanionAssociation(
+        snapshot: DeviceSnapshot,
+        gateway: CompanionAssociationGateway,
+    ) {
+        pendingAssociationSnapshot = snapshot
+        mutableUiState.update {
+            it.copy(
+                autonomousCollectionStatus = AutonomousCollectionStatus.SETUP_IN_PROGRESS,
+                autonomousCollectionDetail = "Approve the Android companion association for ${snapshot.address}.",
+            )
+        }
+        gateway.requestAssociation(
+            address = snapshot.address,
+            onPending = { sender -> mutableAssociationIntentSenders.tryEmit(sender) },
+            onFailure = { error ->
+                pendingAssociationSnapshot = null
+                updateAutonomousCollectionError(error.message ?: "Companion association failed")
+            },
+        )
+    }
 
     private suspend fun saveSnapshot(device: ScannedDevice?, profile: GattProfile) {
         if (device == null) {
@@ -367,3 +435,23 @@ class BleViewModel(
         const val LIVE_SAMPLE_LIMIT = 2_048
     }
 }
+
+private fun DeviceSnapshot.toScannedDevice(): ScannedDevice = ScannedDevice(
+    name = name,
+    address = address,
+    rssi = 0,
+    serviceUuids = emptyList(),
+)
+
+private fun KmfBatterySampleEntity.toReading(): KmfReading = KmfReading(
+    voltageV = voltageV,
+    currentA = currentA,
+    powerW = powerW,
+    charging = charging,
+    minutesRemaining = minutesRemaining,
+    remainingAh = remainingAh,
+    capacityAh = capacityAh,
+    socPercent = socPercent,
+    chargeKwh = chargeKwh,
+    dischargeKwh = dischargeKwh,
+)

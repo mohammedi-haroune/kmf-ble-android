@@ -18,6 +18,7 @@ fun DeviceList(
     devices: List<ScannedDevice>,
     selectedDevice: ScannedDevice?,
     onConnect: (ScannedDevice) -> Unit,
+    connectEnabled: Boolean = true,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
@@ -32,6 +33,7 @@ fun DeviceList(
                     device = device,
                     selected = device.address == selectedDevice?.address,
                     onConnect = onConnect,
+                    connectEnabled = connectEnabled,
                 )
             }
         }
@@ -43,6 +45,7 @@ private fun DeviceRow(
     device: ScannedDevice,
     selected: Boolean,
     onConnect: (ScannedDevice) -> Unit,
+    connectEnabled: Boolean,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -63,7 +66,7 @@ private fun DeviceRow(
                 Text(text = "Selected")
             }
         }
-        OutlinedButton(onClick = { onConnect(device) }) {
+        OutlinedButton(enabled = connectEnabled, onClick = { onConnect(device) }) {
             Text(text = "Connect")
         }
     }

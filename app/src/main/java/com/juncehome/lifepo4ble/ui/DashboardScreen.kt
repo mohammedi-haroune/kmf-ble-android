@@ -99,7 +99,7 @@ private fun AutonomousCollectionCard(
             Text("Autonomous collection", style = MaterialTheme.typography.titleMedium)
             Text(
                 text = when (status) {
-                    AutonomousCollectionStatus.ACTIVE -> "Enabled — continues after leaving the app and normal restart."
+                    AutonomousCollectionStatus.CONFIGURED -> "Configured — the service collects when the meter is present."
                     AutonomousCollectionStatus.SETUP_IN_PROGRESS -> "Waiting for Android companion approval."
                     AutonomousCollectionStatus.UNSUPPORTED -> "Unavailable on this phone."
                     AutonomousCollectionStatus.ERROR -> "Setup needs attention."
@@ -108,7 +108,7 @@ private fun AutonomousCollectionCard(
                 style = MaterialTheme.typography.bodyMedium,
             )
             detail?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-            if (status == AutonomousCollectionStatus.ACTIVE) {
+            if (status == AutonomousCollectionStatus.CONFIGURED) {
                 OutlinedButton(onClick = onStop) {
                     Text("Stop autonomous collection")
                 }
@@ -172,12 +172,12 @@ fun buildDashboardContent(state: BleUiState): DashboardContent {
         deviceAddress = state.selectedDevice?.address,
         connectionLabel = state.connectionState.toDisplayLabel(),
         bootstrapStatus = state.bootstrapStatusLabel(),
-        lastUpdateTimestampMs = latestInbound?.timestampMs,
+        lastUpdateTimestampMs = latestInbound?.timestampMs ?: state.lastReadingTimestampMs,
         detail = state.latestError,
     )
     val emptyState = when {
         state.selectedDevice == null -> DashboardEmptyState.NoDevice
-        state.connectionState == ConnectionState.DISCONNECTED -> DashboardEmptyState.Disconnected
+        state.connectionState == ConnectionState.DISCONNECTED && !state.hasAFrame -> DashboardEmptyState.Disconnected
         !state.hasAFrame -> DashboardEmptyState.NoData
         else -> null
     }
