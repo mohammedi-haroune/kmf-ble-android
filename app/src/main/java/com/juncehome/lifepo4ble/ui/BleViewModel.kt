@@ -270,12 +270,13 @@ class BleViewModel(
         }
     }
 
-    fun onAssociationCanceled() {
+    fun onAssociationCanceled(detail: String = "Companion association was canceled; background collection is not enabled.") {
+        AppLog.w("CDM association terminal result: $detail", TAG)
         pendingAssociationSnapshot = null
         mutableUiState.update {
             it.copy(
                 autonomousCollectionStatus = AutonomousCollectionStatus.NOT_CONFIGURED,
-                autonomousCollectionDetail = "Companion association was canceled; background collection is not enabled.",
+                autonomousCollectionDetail = detail,
             )
         }
     }
@@ -352,6 +353,7 @@ class BleViewModel(
         snapshot: DeviceSnapshot,
         gateway: CompanionAssociationGateway,
     ) {
+        AppLog.d("CDM setup: requesting association for saved meter profile", TAG)
         pendingAssociationSnapshot = snapshot
         mutableUiState.update {
             it.copy(
@@ -361,9 +363,17 @@ class BleViewModel(
         }
         gateway.requestAssociation(
             address = snapshot.address,
-            onPending = { sender -> mutableAssociationIntentSenders.tryEmit(sender) },
+            onPending = { sender ->
+                val delivered = mutableAssociationIntentSenders.tryEmit(sender)
+                AppLog.d("CDM setup: pending IntentSender emitted=$delivered", TAG)
+                if (!delivered) {
+                    pendingAssociationSnapshot = null
+                    updateAutonomousCollectionError("Android companion setup could not be displayed because the activity was not ready.")
+                }
+            },
             onFailure = { error ->
                 pendingAssociationSnapshot = null
+                AppLog.e("CDM setup: gateway terminal failure", error, TAG)
                 updateAutonomousCollectionError(error.message ?: "Companion association failed")
             },
         )
@@ -447,6 +457,11 @@ class BleViewModel(
         CONFIGURED,
         UNCONFIGURED,
     }
+}
+
+object CompanionAssociationResultDiagnostics {
+    fun describe(resultCode: Int, hasData: Boolean): String =
+        "Android companion setup ended without confirmation (resultCode=$resultCode, resultData=$hasData); background collection is not enabled."
 }
 
 private fun DeviceSnapshot.toScannedDevice(): ScannedDevice = ScannedDevice(

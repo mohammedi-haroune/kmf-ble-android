@@ -17,6 +17,7 @@ import com.juncehome.lifepo4ble.collection.CollectionVisibility
 import com.juncehome.lifepo4ble.ui.TopLevelDestination
 import com.juncehome.lifepo4ble.platform.BlePermissionPolicy
 import com.juncehome.lifepo4ble.ui.BleViewModel
+import com.juncehome.lifepo4ble.ui.CompanionAssociationResultDiagnostics
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
@@ -37,11 +38,16 @@ class MainActivity : ComponentActivity() {
     private val associationLauncher = registerForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult(),
     ) { result ->
+        AppLog.d(
+            "CDM activity result: code=${result.resultCode}, hasData=${result.data != null}",
+        )
         if (result.resultCode == Activity.RESULT_OK) {
             val gateway = (application as BleApplication).graph.companionAssociationGateway
             viewModel.onAssociationCompleted(gateway.associationIdFromResult(result.data ?: Intent()))
         } else {
-            viewModel.onAssociationCanceled()
+            viewModel.onAssociationCanceled(
+                CompanionAssociationResultDiagnostics.describe(result.resultCode, result.data != null),
+            )
         }
     }
 
@@ -52,6 +58,7 @@ class MainActivity : ComponentActivity() {
         refreshReadiness()
         lifecycleScope.launch {
             viewModel.associationIntentSenders.collect { intentSender ->
+                AppLog.d("CDM activity launch: launching chooser IntentSender")
                 associationLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
             }
         }

@@ -13,6 +13,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import com.juncehome.lifepo4ble.AppLog
 
 interface CompanionAssociationGateway {
     fun isSupported(): Boolean
@@ -83,6 +84,7 @@ class AndroidCompanionAssociationGateway(
         onFailure: (Throwable) -> Unit,
     ) {
         if (!isSupported()) {
+            AppLog.w("CDM association request rejected locally: companion setup is unsupported")
             onFailure(CompanionAssociationUnsupportedException())
             return
         }
@@ -94,25 +96,41 @@ class AndroidCompanionAssociationGateway(
             .build()
 
         try {
+            AppLog.d("CDM association request submitted: api=${Build.VERSION.SDK_INT}, filter=bluetooth-le-address")
             companionDeviceManager.associate(
                 request,
                 object : CompanionDeviceManager.Callback() {
                     override fun onAssociationPending(intentSender: IntentSender) {
+                        AppLog.d("CDM association pending: received chooser IntentSender; forwarding to activity")
                         onPending(intentSender)
                     }
 
                     @Suppress("OVERRIDE_DEPRECATION")
                     override fun onDeviceFound(intentSender: IntentSender) {
+                        AppLog.d("CDM association device found: received legacy IntentSender; forwarding to activity")
                         onPending(intentSender)
                     }
 
+                    override fun onAssociationCreated(associationInfo: android.companion.AssociationInfo) {
+                        AppLog.d("CDM association created: id=${associationInfo.id}")
+                    }
+
                     override fun onFailure(error: CharSequence?) {
-                        onFailure(IllegalStateException(error?.toString() ?: "Companion association failed"))
+                        val detail = error?.toString() ?: "Companion association failed"
+                        AppLog.e("CDM association failed: detail=$detail")
+                        onFailure(IllegalStateException(detail))
+                    }
+
+                    override fun onFailure(errorCode: Int, error: CharSequence?) {
+                        val detail = error?.toString() ?: "Companion association failed"
+                        AppLog.e("CDM association failed: code=$errorCode detail=$detail")
+                        onFailure(IllegalStateException("Companion association failed (code=$errorCode): $detail"))
                     }
                 },
                 callbackHandler,
             )
         } catch (error: Throwable) {
+            AppLog.e("CDM association request threw before callback", error)
             onFailure(error)
         }
     }

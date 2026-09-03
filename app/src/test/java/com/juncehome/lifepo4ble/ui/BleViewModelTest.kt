@@ -35,6 +35,14 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class BleViewModelTest {
     @Test
+    fun companionResultDiagnosticPreservesAndroidResultFacts() {
+        assertEquals(
+            "Android companion setup ended without confirmation (resultCode=0, resultData=false); background collection is not enabled.",
+            CompanionAssociationResultDiagnostics.describe(resultCode = 0, hasData = false),
+        )
+    }
+
+    @Test
     fun completedLegacyAssociationPersistsConfigurationStartsPresenceAndStartsService() = runTest {
         val snapshot = configuredSnapshot()
         val store = FakeDeviceStore(initial = snapshot)
