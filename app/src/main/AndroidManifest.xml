@@ -44,7 +44,8 @@
         <service
             android:name=".collection.BatteryCollectionService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="connectedDevice"
+            android:stopWithTask="false" />
 
         <service
             android:name=".collection.KmfCompanionDeviceService"
