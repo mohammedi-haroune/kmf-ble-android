@@ -15,6 +15,7 @@ import com.juncehome.lifepo4ble.data.KmfHistoryStore
 import com.juncehome.lifepo4ble.data.KmfNotificationObservation
 import com.juncehome.lifepo4ble.data.KmfWriteObservation
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -76,7 +77,7 @@ class BleViewModelTest {
     @Test
     fun directAssociationCreatedPersistsConfigurationOnlyOnceWhenActivityAlsoReturnsSuccess() = runTest {
         val snapshot = configuredSnapshot()
-        val store = FakeDeviceStore(initial = snapshot)
+        val store = FakeDeviceStore(initial = snapshot).apply { gateFirstAutonomousEnable() }
         val gateway = FakeCompanionAssociationGateway()
         val serviceCommander = FakeCollectionServiceCommander()
         val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
@@ -94,11 +95,19 @@ class BleViewModelTest {
             advanceUntilIdle()
 
             gateway.completeAssociationDirectly(37)
-            advanceUntilIdle()
+            runCurrent()
             viewModel.onAssociationCompleted(37)
+            runCurrent()
+
+            assertEquals(1, store.autonomousEnableCalls)
+            assertEquals(listOf(snapshot.address), gateway.observedAddresses)
+            assertEquals(emptyList<String>(), serviceCommander.commands)
+
+            store.releaseFirstAutonomousEnable()
             advanceUntilIdle()
 
             assertEquals(CollectionConfiguration(snapshot, 37, true), store.collectionConfiguration.first())
+            assertEquals(1, store.autonomousEnableCalls)
             assertEquals(listOf(snapshot.address), gateway.observedAddresses)
             assertEquals(listOf("start"), serviceCommander.commands)
             assertEquals(AutonomousCollectionStatus.CONFIGURED, viewModel.uiState.value.autonomousCollectionStatus)
@@ -659,7 +668,10 @@ class BleViewModelTest {
     ) : DeviceSnapshotStore {
         private val snapshots = MutableStateFlow(initial)
         private val configurations = MutableStateFlow<CollectionConfiguration?>(null)
+        private var firstAutonomousEnableGate: CompletableDeferred<Unit>? = null
         var saved: DeviceSnapshot? = null
+        var autonomousEnableCalls = 0
+            private set
 
         override val snapshot: Flow<DeviceSnapshot?> = snapshots
         override val collectionConfiguration: Flow<CollectionConfiguration?> = configurationFlow ?: configurations
@@ -672,8 +684,18 @@ class BleViewModelTest {
         val operationLog = mutableListOf<String>()
 
         override suspend fun enableAutonomousCollection(snapshot: DeviceSnapshot, associationId: Int?) {
+            autonomousEnableCalls += 1
+            firstAutonomousEnableGate?.await()
             save(snapshot)
             configurations.value = CollectionConfiguration(snapshot, associationId, true)
+        }
+
+        fun gateFirstAutonomousEnable() {
+            firstAutonomousEnableGate = CompletableDeferred()
+        }
+
+        fun releaseFirstAutonomousEnable() {
+            checkNotNull(firstAutonomousEnableGate).complete(Unit)
         }
 
         override suspend fun disableAutonomousCollection() {

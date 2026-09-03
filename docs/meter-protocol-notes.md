@@ -3,7 +3,8 @@
 ## Autonomous-collection support boundary
 
 - One mandatory setup is required: grant Bluetooth and notification permissions,
-  select one meter, and approve Android's companion-device association sheet.
+  select one meter, and complete Android companion-device association. Approve
+  the system association UI if Android shows it.
 - The autonomous presence-wake guarantee requires Android API 31+ and
   `FEATURE_COMPANION_DEVICE_SETUP`.
 - The selected meter must keep a stable address, or use an address Android can
@@ -41,6 +42,7 @@ evidence:
 
 - companion disappearance/reappearance recovery;
 - reboot restoration without opening the activity; and
+- ordinary system process-death recovery; and
 - notification Stop preventing reconnect.
 
 Android Active Apps **Stop** and Settings force-stop remain intentionally

@@ -23,8 +23,9 @@ Native Android BLE utility for a KMF LiFePO4 meter.
 After one mandatory setup, the app can collect from one selected meter when its
 activity is backgrounded or removed from Recents. Setup requires Bluetooth and
 notification permission grants, a stable meter address (or an address Android
-can resolve after bonding), and approval of the Android companion-device
-association sheet. This autonomous wake guarantee requires API 31+ and a device
+can resolve after bonding), and completing Android companion-device association.
+Approve the system association UI if Android shows it. This autonomous wake
+guarantee requires API 31+ and a device
 with `FEATURE_COMPANION_DEVICE_SETUP`.
 
 Collection runs as a visible `connectedDevice` foreground service. Once KMF
@@ -37,8 +38,9 @@ the package from restarting itself afterwards.
 On 2026-09-03, a physical Android 14 validation completed the association and
 Recents-removal path: the configured foreground collector stayed running after
 its task card was swiped away and wrote a later battery sample. Meter identity
-and readings are intentionally not recorded here. Reboot restoration,
-out-of-range appearance recovery, and notification Stop remain unvalidated.
+and readings are intentionally not recorded here. Reboot restoration, ordinary
+system process-death recovery, out-of-range appearance recovery, and
+notification Stop remain unvalidated.
 
 ## Development
 
