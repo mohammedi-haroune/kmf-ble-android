@@ -44,6 +44,7 @@ class BleViewModel(
     private var recentSamplesDeviceAddress: String? = null
     private var pendingAssociationSnapshot: DeviceSnapshot? = null
     private var autonomousCollectionConfigured = false
+    private var collectionConfigurationState = CollectionConfigurationState.UNKNOWN
     private var awaitingAutonomousPermissions = false
     private var currentAppVisibility = CollectionVisibility.BACKGROUND
     private val workScope: CoroutineScope
@@ -68,7 +69,7 @@ class BleViewModel(
                 val nextState = BleStateReducer.reduce(previousState, event, parser, nowMs)
                 mutableUiState.value = nextState
                 syncRecentBatterySamples(nextState.selectedDevice?.address)
-                if (!autonomousCollectionConfigured) {
+                if (collectionConfigurationState == CollectionConfigurationState.UNCONFIGURED) {
                     persistHistory(event, nextState, nowMs)
                     if (event is BleEvent.ServicesDiscovered) {
                         saveSnapshot(nextState.selectedDevice, event.profile)
@@ -79,6 +80,7 @@ class BleViewModel(
         workScope.launch {
             deviceStore.collectionConfiguration.collect { configuration ->
                 if (configuration?.autonomousEnabled == true) {
+                    collectionConfigurationState = CollectionConfigurationState.CONFIGURED
                     autonomousCollectionConfigured = true
                     mutableUiState.update {
                         it.copy(
@@ -88,14 +90,17 @@ class BleViewModel(
                         )
                     }
                     collectionServiceCommander?.setVisibility(currentAppVisibility)
-                } else if (autonomousCollectionConfigured) {
-                    autonomousCollectionConfigured = false
-                    mutableUiState.update {
-                        it.copy(
-                            autonomousCollectionStatus = AutonomousCollectionStatus.NOT_CONFIGURED,
-                            autonomousCollectionDetail = null,
-                            autonomousCollectionConfigured = false,
-                        )
+                } else {
+                    collectionConfigurationState = CollectionConfigurationState.UNCONFIGURED
+                    if (autonomousCollectionConfigured) {
+                        autonomousCollectionConfigured = false
+                        mutableUiState.update {
+                            it.copy(
+                                autonomousCollectionStatus = AutonomousCollectionStatus.NOT_CONFIGURED,
+                                autonomousCollectionDetail = null,
+                                autonomousCollectionConfigured = false,
+                            )
+                        }
                     }
                 }
             }
@@ -246,6 +251,7 @@ class BleViewModel(
             try {
                 requireNotNull(companionAssociationGateway).startPresenceObservation(snapshot.address)
                 deviceStore.enableAutonomousCollection(snapshot, associationId)
+                collectionConfigurationState = CollectionConfigurationState.CONFIGURED
                 autonomousCollectionConfigured = true
                 collectionServiceCommander?.start()
                 collectionServiceCommander?.setVisibility(currentAppVisibility)
@@ -283,6 +289,7 @@ class BleViewModel(
                 AppLog.e("failed to stop companion presence observation", error, TAG)
             }
             deviceStore.disableAutonomousCollection()
+            collectionConfigurationState = CollectionConfigurationState.UNCONFIGURED
             autonomousCollectionConfigured = false
             mutableUiState.update {
                 it.copy(
@@ -433,6 +440,12 @@ class BleViewModel(
     private companion object {
         const val TAG = "KMF-BLE"
         const val LIVE_SAMPLE_LIMIT = 2_048
+    }
+
+    private enum class CollectionConfigurationState {
+        UNKNOWN,
+        CONFIGURED,
+        UNCONFIGURED,
     }
 }
 

@@ -409,6 +409,38 @@ class BleViewModelTest {
     }
 
     @Test
+    fun configuredServiceEventsDoNotPersistBeforeConfigurationInitialLoadCompletes() = runTest {
+        val snapshot = configuredSnapshot()
+        val delayedConfigurations = MutableSharedFlow<CollectionConfiguration?>(extraBufferCapacity = 1)
+        val repository = FakeBleRepository()
+        val historyStore = FakeHistoryStore()
+        val store = FakeDeviceStore(
+            initial = snapshot,
+            configurationFlow = delayedConfigurations,
+        )
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = BleViewModel(repository, store, historyStore, scope = viewModelScope)
+        val device = ScannedDevice(snapshot.name, snapshot.address, -55, emptyList())
+        val notifyUuid = UUID.fromString(snapshot.notifyUuid!!)
+
+        try {
+            repository.events.emit(BleEvent.Connecting(device))
+            repository.events.emit(BleEvent.NotificationReceived(notifyUuid, ":A=1326,1080,0,5793,\n".encodeToByteArray()))
+            advanceUntilIdle()
+
+            delayedConfigurations.emit(CollectionConfiguration(snapshot, 42, true))
+            advanceUntilIdle()
+
+            assertEquals(emptyList<String>(), historyStore.resetSessions)
+            assertEquals(emptyList<KmfNotificationObservation>(), historyStore.notifications)
+            assertEquals(AutonomousCollectionStatus.CONFIGURED, viewModel.uiState.value.autonomousCollectionStatus)
+            assertEquals(snapshot.address, viewModel.uiState.value.selectedDevice?.address)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
     fun missingRuntimePermissionsRequestGrantBeforeCompanionAssociation() = runTest {
         val snapshot = configuredSnapshot()
         val store = FakeDeviceStore(initial = snapshot)
@@ -579,13 +611,16 @@ class BleViewModelTest {
         }
     }
 
-    private class FakeDeviceStore(initial: DeviceSnapshot? = null) : DeviceSnapshotStore {
+    private class FakeDeviceStore(
+        initial: DeviceSnapshot? = null,
+        configurationFlow: Flow<CollectionConfiguration?>? = null,
+    ) : DeviceSnapshotStore {
         private val snapshots = MutableStateFlow(initial)
         private val configurations = MutableStateFlow<CollectionConfiguration?>(null)
         var saved: DeviceSnapshot? = null
 
         override val snapshot: Flow<DeviceSnapshot?> = snapshots
-        override val collectionConfiguration: Flow<CollectionConfiguration?> = configurations
+        override val collectionConfiguration: Flow<CollectionConfiguration?> = configurationFlow ?: configurations
 
         override suspend fun save(snapshot: DeviceSnapshot) {
             saved = snapshot
