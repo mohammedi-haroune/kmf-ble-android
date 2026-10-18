@@ -172,7 +172,7 @@ object NearbyMeterList {
             val named = !device.name.isNullOrBlank()
             NearbyMeterRow(
                 device = device,
-                name = if (named) device.name!!.trim() else "Unnamed device",
+                name = device.name?.trim()?.takeIf { it.isNotEmpty() } ?: "Unnamed device",
                 named = named,
                 signal = signalFor(device.rssi),
                 likelyMeter = device.address == best?.address,
