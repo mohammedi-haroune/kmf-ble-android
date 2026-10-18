@@ -19,12 +19,19 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.juncehome.lifepo4ble.ui.theme.KmfTheme
 import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.roundToLong
 
 /** One chart point; [xFraction] 0 = window start, 1 = window end. */
 @Immutable
@@ -34,6 +41,16 @@ data class TrendChartPoint(
     /** Starts a new line segment (no line is drawn across a data gap). */
     val startsSegment: Boolean = false,
 )
+
+/** One Y-axis tick: [value] in the chart's units, [label] is the unsigned magnitude. */
+@Immutable
+data class TrendChartTick(val value: Double, val label: String)
+
+/** Width reserved on the left of a chart that draws Y-axis ticks (label column plus gap). */
+val TrendChartYAxisInset: Dp = 22.dp
+
+/** Width of the right-aligned Y-tick label column inside [TrendChartYAxisInset]. */
+private val TrendChartYAxisLabelWidth: Dp = 18.dp
 
 /** How the line is colored. */
 enum class TrendChartColorMode {
@@ -61,6 +78,44 @@ object TrendChartMath {
         return low
     }
 
+    private val yTickMantissas = doubleArrayOf(1.0, 2.0, 5.0)
+    private const val MAX_Y_TICK_INTERVALS = 4
+    private const val MAX_Y_TICK_DECADES = 9
+
+    /**
+     * Smallest "nice" step (1, 2 or 5 times a power of ten, at least 1) with at most
+     * [MAX_Y_TICK_INTERVALS] intervals across the range, so even a +-1 W scale gets ticks.
+     */
+    fun yTickStep(yMin: Double, yMax: Double): Double {
+        val span = yMax - yMin
+        var decade = 1.0
+        repeat(MAX_Y_TICK_DECADES) {
+            yTickMantissas.forEach { mantissa ->
+                val step = mantissa * decade
+                if (span > 0.0 && span / step <= MAX_Y_TICK_INTERVALS) return step
+            }
+            decade *= 10.0
+        }
+        return decade
+    }
+
+    /**
+     * Ticks at multiples of [yTickStep] inside [yMin, yMax]. Labels are the absolute value with no
+     * sign, so charging and discharging sides read the same. Empty for an empty or invalid range.
+     */
+    fun yTicks(yMin: Double, yMax: Double): List<TrendChartTick> {
+        val span = yMax - yMin
+        if (!(span > 0.0) || span.isInfinite()) return emptyList()
+        val step = yTickStep(yMin, yMax)
+        val first = ceil(yMin / step).toLong()
+        val last = floor(yMax / step).toLong()
+        if (last < first) return emptyList()
+        return (first..last).map { index ->
+            val value = index * step
+            TrendChartTick(value = value, label = abs(value).roundToLong().toString())
+        }
+    }
+
     /** Vertical position 0 (top) .. 1 (bottom) of [value] in [yMin, yMax]. */
     fun yFraction(value: Double, yMin: Double, yMax: Double): Float {
         val span = yMax - yMin
@@ -79,6 +134,9 @@ object TrendChartMath {
  * - [gapMarker]: red dashed vertical marker at the last point (data stopped).
  * - [scrubIndex] / [onScrub]: vertical scrub line and dot; tap or horizontal drag reports the
  *   nearest point index (vertical scrolling of the page still works).
+ * - [yTicks]: left-side tick labels with faint grid lines at each tick (replaces [gridLines]);
+ *   reserves [TrendChartYAxisInset] on the left for the labels.
+ * - [height] null: fill the height given by the parent (use weight in a Column).
  */
 @Composable
 fun TrendChart(
@@ -88,9 +146,10 @@ fun TrendChart(
     colorMode: TrendChartColorMode,
     contentDescription: String,
     modifier: Modifier = Modifier,
-    height: Dp = 80.dp,
+    height: Dp? = 80.dp,
     verticalPadding: Dp = 4.dp,
     gridLines: Boolean = false,
+    yTicks: List<TrendChartTick>? = null,
     endDot: Boolean = true,
     gapMarker: Boolean = false,
     scrubIndex: Int? = null,
@@ -100,7 +159,10 @@ fun TrendChart(
     val up = colors.charge.accent
     val down = if (colorMode == TrendChartColorMode.Signed) colors.discharge.accent else up
     val fillAlpha = if (colorMode == TrendChartColorMode.Signed) 0.16f else 0.10f
-    val zeroLine = colors.border
+    val zeroLine = if (yTicks != null) colors.textTertiary else colors.border
+    val axisLabelColor = colors.textTertiary
+    val axisLabelStyle: TextStyle = KmfTheme.numbers.small.copy(fontSize = 10.sp, lineHeight = 12.sp)
+    val textMeasurer = rememberTextMeasurer()
     val grid = colors.hairline
     val marker = colors.error.accent
     val surface = colors.surface
@@ -108,22 +170,26 @@ fun TrendChart(
     val scrubDot = colors.textPrimary
     val currentPoints = rememberUpdatedState(points)
     val currentOnScrub = rememberUpdatedState(onScrub)
+    val currentHasAxis = rememberUpdatedState(yTicks != null)
 
     val touch = if (onScrub != null) {
         Modifier
             .pointerInput(Unit) {
                 detectTapGestures { offset ->
-                    report(currentPoints.value, currentOnScrub.value, offset.x, size.width.toFloat(), 4.dp.toPx())
+                    val inset = if (currentHasAxis.value) TrendChartYAxisInset.toPx() else 0f
+                    report(currentPoints.value, currentOnScrub.value, offset.x - inset, size.width - inset, 4.dp.toPx())
                 }
             }
             .pointerInput(Unit) {
                 detectHorizontalDragGestures(
                     onDragStart = { offset ->
-                        report(currentPoints.value, currentOnScrub.value, offset.x, size.width.toFloat(), 4.dp.toPx())
+                        val inset = if (currentHasAxis.value) TrendChartYAxisInset.toPx() else 0f
+                        report(currentPoints.value, currentOnScrub.value, offset.x - inset, size.width - inset, 4.dp.toPx())
                     },
                 ) { change, _ ->
                     change.consume()
-                    report(currentPoints.value, currentOnScrub.value, change.position.x, size.width.toFloat(), 4.dp.toPx())
+                    val inset = if (currentHasAxis.value) TrendChartYAxisInset.toPx() else 0f
+                    report(currentPoints.value, currentOnScrub.value, change.position.x - inset, size.width - inset, 4.dp.toPx())
                 }
             }
     } else {
@@ -133,21 +199,36 @@ fun TrendChart(
     Canvas(
         modifier = modifier
             .fillMaxWidth()
-            .height(height)
+            .let { if (height != null) it.height(height) else it }
             .semantics { this.contentDescription = contentDescription }
             .then(touch),
     ) {
         if (points.isEmpty()) return@Canvas
+        val axisInset = if (yTicks != null) TrendChartYAxisInset.toPx() else 0f
         val endPad = 4.dp.toPx()
         val vPad = verticalPadding.toPx()
-        val usableW = size.width - endPad
+        val usableW = size.width - axisInset - endPad
         val plotTop = vPad
         val plotBottom = size.height - vPad
         val plotH = plotBottom - plotTop
-        fun x(point: TrendChartPoint) = point.xFraction.coerceIn(0f, 1f) * usableW
+        fun x(point: TrendChartPoint) = axisInset + point.xFraction.coerceIn(0f, 1f) * usableW
         fun y(value: Double) = plotTop + TrendChartMath.yFraction(value, yMin, yMax) * plotH
 
-        if (gridLines) {
+        if (yTicks != null) {
+            yTicks.forEach { tick ->
+                val gy = y(tick.value)
+                drawLine(grid, Offset(axisInset, gy), Offset(size.width, gy), strokeWidth = 1.dp.toPx())
+            }
+            val labelWidth = TrendChartYAxisLabelWidth.toPx()
+            yTicks.forEach { tick ->
+                val layout = textMeasurer.measure(tick.label, axisLabelStyle)
+                drawText(
+                    layout,
+                    color = axisLabelColor,
+                    topLeft = Offset(labelWidth - layout.size.width, y(tick.value) - layout.size.height / 2f),
+                )
+            }
+        } else if (gridLines) {
             listOf(plotTop, plotTop + plotH / 2f, plotBottom).forEach { gy ->
                 drawLine(grid, Offset(0f, gy), Offset(size.width, gy), strokeWidth = 1.dp.toPx())
             }
@@ -178,7 +259,7 @@ fun TrendChart(
             }
             drawLine(
                 color = zeroLine,
-                start = Offset(0f, baseY),
+                start = Offset(axisInset, baseY),
                 end = Offset(size.width, baseY),
                 strokeWidth = 1.dp.toPx(),
                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 4.dp.toPx())),
@@ -212,6 +293,7 @@ fun TrendChart(
     }
 }
 
+/** [x] and [width] are plot-relative (axis inset already removed). */
 private fun report(
     points: List<TrendChartPoint>,
     onScrub: ((Int) -> Unit)?,
