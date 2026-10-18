@@ -30,6 +30,7 @@ import com.juncehome.lifepo4ble.platform.BlePermissionPolicy
 import com.juncehome.lifepo4ble.ui.BleViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
+import java.io.File
 
 private val Context.deviceDataStore by preferencesDataStore(name = "device")
 
@@ -62,7 +63,7 @@ class AppGraph(
         Room.databaseBuilder(
             application,
             KmfDatabase::class.java,
-            "kmf-history.db",
+            DATABASE_NAME,
         ).build()
     }
 
@@ -124,7 +125,13 @@ class AppGraph(
 
     val trendsViewModelFactory: ViewModelProvider.Factory by lazy {
         TrendsViewModel.factory(
-            store = KmfTrendsRepository(database.kmfBatterySampleDao()),
+            store = KmfTrendsRepository(
+                dao = database.kmfBatterySampleDao(),
+                dbSizeBytes = {
+                    val main = application.getDatabasePath(DATABASE_NAME)
+                    listOf("", "-wal", "-shm").sumOf { File(main.path + it).length() }
+                },
+            ),
             exportStore = batteryHistoryExporter,
         )
     }
@@ -134,3 +141,5 @@ class AppGraph(
             application.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
         }
 }
+
+private const val DATABASE_NAME = "kmf-history.db"

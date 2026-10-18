@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.Flow
 data class KmfHistorySummary(
     val count: Long,
     val earliestMs: Long?,
+    /** On-disk size of the database plus its WAL/SHM files; 0 when unknown. */
+    val dbSizeBytes: Long = 0L,
 )
 
 /**
@@ -38,6 +40,7 @@ interface KmfTrendsStore {
 
 class KmfTrendsRepository(
     private val dao: KmfBatterySampleDao,
+    private val dbSizeBytes: () -> Long = { 0L },
 ) : KmfTrendsStore {
     override fun observeChanges(): Flow<Long?> = dao.observeLatestId()
 
@@ -54,7 +57,11 @@ class KmfTrendsRepository(
         )
 
     override suspend fun readSummary(): KmfHistorySummary =
-        KmfHistorySummary(count = dao.count(), earliestMs = dao.earliestTimestampMs())
+        KmfHistorySummary(
+            count = dao.count(),
+            earliestMs = dao.earliestTimestampMs(),
+            dbSizeBytes = dbSizeBytes(),
+        )
 
     companion object {
         /** Joins first/last edge rows by bucket; buckets missing on either side are dropped. */

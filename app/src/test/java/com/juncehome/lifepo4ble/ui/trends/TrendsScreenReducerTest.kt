@@ -48,7 +48,8 @@ class TrendsScreenReducerTest {
         latest: KmfBatterySampleEntity? = null,
         count: Long = 0,
         earliest: Long? = null,
-    ) = TrendsData(now, buckets, latest, counters, KmfHistorySummary(count, earliest))
+        dbSizeBytes: Long = 0,
+    ) = TrendsData(now, buckets, latest, counters, KmfHistorySummary(count, earliest, dbSizeBytes))
 
     private fun reduce(
         range: TrendsRange = TrendsRange.Day,
@@ -234,6 +235,17 @@ class TrendsScreenReducerTest {
         assertEquals("128,430", state.countText)
         assertEquals("128,430 readings since 3 Oct $dot kept until you clear them", state.summaryLine)
         assertTrue(state.canClear && state.canExport)
+    }
+
+    @Test
+    fun summaryLineShowsDbSize() {
+        val earliest = Instant.parse("2026-10-03T08:00:00Z").toEpochMilli()
+        val withSize = reduce(data = data(count = 128_430, earliest = earliest, dbSizeBytes = 331_500_000))
+        assertEquals("128,430 readings since 3 Oct $dot 331.5 MB $dot kept until you clear them", withSize.summaryLine)
+        assertEquals("1 MB", TrendsScreenReducer.formatDbSize(1_000_000).replace(".0 MB", " MB"))
+        assertEquals("315.0 MB", TrendsScreenReducer.formatDbSize(315_000_000))
+        assertEquals("1.20 GB", TrendsScreenReducer.formatDbSize(1_200_000_000))
+        assertEquals("1 KB", TrendsScreenReducer.formatDbSize(10))
     }
 
     @Test

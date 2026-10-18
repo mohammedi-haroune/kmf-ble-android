@@ -184,7 +184,7 @@ object TrendsScreenReducer {
             chartDescription = description(range, metric, nowValue, stats, points.isEmpty()),
             energy = energy(range, data, now, zone, locale),
             countText = String.format(Locale.US, "%,d", count),
-            summaryLine = summaryLine(count, data?.summary?.earliestMs, zone, locale),
+            summaryLine = summaryLine(count, data?.summary?.earliestMs, data?.summary?.dbSizeBytes ?: 0L, zone, locale),
             canClear = count > 0 && !running,
             canExport = count > 0 && !running,
             exportButtonLabel = (exportStatus as? TrendsExportStatus.Running)
@@ -356,11 +356,19 @@ object TrendsScreenReducer {
         )
     }
 
-    private fun summaryLine(count: Long, earliestMs: Long?, zone: ZoneId, locale: Locale): String {
+    private fun summaryLine(count: Long, earliestMs: Long?, dbSizeBytes: Long, zone: ZoneId, locale: Locale): String {
         if (count <= 0L) return "No readings saved yet"
         val grouped = String.format(Locale.US, "%,d", count)
         val since = earliestMs?.let { " since " + formatter("d MMM", zone, locale).format(Instant.ofEpochMilli(it)) }.orEmpty()
-        return "$grouped readings$since \u00b7 kept until you clear them"
+        val size = if (dbSizeBytes > 0L) " \u00b7 ${formatDbSize(dbSizeBytes)}" else ""
+        return "$grouped readings$since$size \u00b7 kept until you clear them"
+    }
+
+    /** Decimal units, matching Android Settings storage readouts. */
+    internal fun formatDbSize(bytes: Long): String = when {
+        bytes >= 1_000_000_000L -> String.format(Locale.US, "%.2f GB", bytes / 1e9)
+        bytes >= 1_000_000L -> String.format(Locale.US, "%.1f MB", bytes / 1e6)
+        else -> String.format(Locale.US, "%d KB", maxOf(1L, bytes / 1_000L))
     }
 
     private fun lastExportLine(info: KmfBatteryHistoryExportInfo?, nowMs: Long?, zone: ZoneId, locale: Locale): String {
