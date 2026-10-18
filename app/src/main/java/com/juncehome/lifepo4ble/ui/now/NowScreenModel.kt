@@ -154,6 +154,17 @@ object NowScreenReducer {
     private const val ELLIPSIS = "\u2026"
     private val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm", Locale.US)
 
+    /** Largest unit first; the first step that fits sets the top level and the next step sets the second level. */
+    private data class DurationStep(val label: String, val minutes: Int, val subLabel: String, val subMinutes: Int)
+
+    private val DURATION_STEPS = listOf(
+        DurationStep("y", 525_600, "mo", 43_200),
+        DurationStep("mo", 43_200, "d", 1_440),
+        DurationStep("w", 10_080, "d", 1_440),
+        DurationStep("d", 1_440, "h", 60),
+        DurationStep("h", 60, "m", 1),
+    )
+
     fun reduce(
         state: BleUiState,
         samples: List<KmfBatterySampleEntity>,
@@ -394,10 +405,13 @@ object NowScreenReducer {
         return "${formatDuration(minutesRemaining)} $DOT $clock"
     }
 
+    /** Two levels max: "45m", "2h 54m", "4d 0h", "2w 6d", "1mo 5d", "2y 3mo". Months 30d, years 365d. */
     fun formatDuration(minutes: Int): String {
-        val hours = minutes / 60
-        val rest = minutes % 60
-        return if (hours > 0) String.format(Locale.US, "%dh %02dm", hours, rest) else "${rest}m"
+        val step = DURATION_STEPS.firstOrNull { minutes >= it.minutes } ?: return "${minutes}m"
+        val top = minutes / step.minutes
+        val sub = (minutes % step.minutes) / step.subMinutes
+        val subText = if (step.subLabel == "m") String.format(Locale.US, "%02d", sub) else sub.toString()
+        return "$top${step.label} $subText${step.subLabel}"
     }
 
     fun formatClock(epochMs: Long, zoneId: ZoneId): String =

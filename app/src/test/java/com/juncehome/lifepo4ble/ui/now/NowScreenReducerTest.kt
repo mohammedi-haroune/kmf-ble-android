@@ -317,6 +317,18 @@ class NowScreenReducerTest {
         assertEquals("2h 00m \u00b7 16:32", NowScreenReducer.formatEta(120, now, utc))
         assertNull(NowScreenReducer.formatEta(0, now, utc))
         assertNull(NowScreenReducer.formatEta(-5, now, utc))
+    }
+
+    @Test
+    fun durationUsesTwoLevelsMax() {
+        assertEquals("0m", NowScreenReducer.formatDuration(0))
+        assertEquals("45m", NowScreenReducer.formatDuration(45))
+        assertEquals("2h 54m", NowScreenReducer.formatDuration(174))
+        assertEquals("4d 0h", NowScreenReducer.formatDuration(5793))
+        assertEquals("2w 6d", NowScreenReducer.formatDuration(20 * 1_440))
+        assertEquals("1w 0d", NowScreenReducer.formatDuration(7 * 1_440))
+        assertEquals("1mo 5d", NowScreenReducer.formatDuration(35 * 1_440))
+        assertEquals("2y 3mo", NowScreenReducer.formatDuration(2 * 525_600 + 3 * 43_200))
 
         assertEquals("2h 54m \u00b7 17:26", reduce(state(minutes = 174)).flow.eta)
         assertEquals("Estimate unavailable", reduce(state(minutes = 0)).flow.eta)
