@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattConnectionSettings
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattService
@@ -11,6 +12,7 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
 import android.content.Context
+import androidx.core.content.ContextCompat
 import android.os.Build
 import com.juncehome.lifepo4ble.AppLog
 import com.juncehome.lifepo4ble.data.DeviceSnapshot
@@ -196,6 +198,13 @@ class AndroidBleSession(
             close(securityException)
             return@callbackFlow
         }
+        if (gatt == null) {
+            val failure = IllegalStateException("connectGatt returned null")
+            AppLog.e("connectGatt returned null", failure, TAG)
+            trySend(BleEvent.Error("connectGatt returned null", failure))
+            close(failure)
+            return@callbackFlow
+        }
         activeGatt = gatt
 
         awaitClose {
@@ -257,10 +266,14 @@ class AndroidBleSession(
     private fun BluetoothDevice.connectLeGatt(
         context: Context,
         callback: BluetoothGattCallback,
-    ): BluetoothGatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-        connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+    ): BluetoothGatt? = if (Build.VERSION.SDK_INT >= 37) {
+        val settings = BluetoothGattConnectionSettings.Builder()
+            .setAutoConnectEnabled(false)
+            .setTransport(BluetoothDevice.TRANSPORT_LE)
+            .build()
+        connectGatt(settings, ContextCompat.getMainExecutor(context), callback)
     } else {
-        connectGatt(context, false, callback)
+        connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
     }
 
     @SuppressLint("MissingPermission")
