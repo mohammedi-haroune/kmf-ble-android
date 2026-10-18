@@ -13,6 +13,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -150,31 +151,41 @@ fun NowScreen(
     modifier: Modifier = Modifier,
 ) {
     val colors = KmfTheme.colors
-    Column(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .background(colors.background)
-            .padding(contentPadding)
-            .verticalScroll(rememberScrollState())
-            .padding(start = KmfDimens.ScreenPadding, end = KmfDimens.ScreenPadding, top = 20.dp, bottom = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(KmfDimens.SectionGap),
+            .padding(contentPadding),
     ) {
-        NowHeader(model.meterName, model.pill, onOpenDevice, onPillAction = onBannerAction)
-        model.banner?.let { banner ->
-            Banner(
-                title = banner.title,
-                body = banner.body,
-                tone = banner.tone,
-                icon = if (banner.tone == BannerTone.Error) KmfIcons.Warning else KmfIcons.BluetoothOff,
-                actionLabel = banner.action?.label,
-                onAction = banner.action?.let { action -> { onBannerAction(action) } },
-            )
+        // Column is at least one viewport tall so the weighted spacer pins the totals footer to the bottom
+        // when the content is short; when it overflows, the spacer collapses and the page scrolls normally.
+        Column(
+            modifier = Modifier
+                .verticalScroll(rememberScrollState())
+                .heightIn(min = maxHeight)
+                .padding(start = KmfDimens.ScreenPadding, end = KmfDimens.ScreenPadding, top = 20.dp, bottom = 16.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(KmfDimens.SectionGap)) {
+                NowHeader(model.meterName, model.pill, onOpenDevice, onPillAction = onBannerAction)
+                model.banner?.let { banner ->
+                    Banner(
+                        title = banner.title,
+                        body = banner.body,
+                        tone = banner.tone,
+                        icon = if (banner.tone == BannerTone.Error) KmfIcons.Warning else KmfIcons.BluetoothOff,
+                        actionLabel = banner.action?.label,
+                        onAction = banner.action?.let { action -> { onBannerAction(action) } },
+                    )
+                }
+                SocSection(model)
+                FlowCard(model.flow)
+                PowerChartCard(model.chart)
+                DataLinkCard(model.dataLink)
+            }
+            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.height(KmfDimens.SectionGap))
+            TotalsFooter(model.totalsIn, model.totalsOut)
         }
-        SocSection(model)
-        FlowCard(model.flow)
-        PowerChartCard(model.chart)
-        DataLinkCard(model.dataLink)
-        TotalsFooter(model.totalsIn, model.totalsOut)
     }
 }
 
