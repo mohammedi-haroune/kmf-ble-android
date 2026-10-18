@@ -15,8 +15,8 @@ export JAVA_HOME
 help:
 	@printf '%s\n' \
 		'Available targets:' \
-		'  make web-build  Build the React WebView assets into app/src/main/assets/liveline-power' \
-		'  make build      Build the web assets and the debug Android APK' \
+		'  make web-build  Build the Liveline spike (web/liveline-power-spike); no longer bundled in the app' \
+		'  make build      Build the debug Android APK' \
 		'  make install    Install the debug APK with adb' \
 		'  make run        Build, install, and launch the app on Dashboard' \
 		'  make live       Build, install, and launch the app directly on Live' \
@@ -27,7 +27,8 @@ help:
 web-build:
 	cd "$(WEB_DIR)" && npm run build
 
-build: web-build
+# The app no longer bundles the Liveline WebView asset, so build does not depend on web-build.
+build:
 	$(GRADLEW) :app:assembleDebug
 
 install: build

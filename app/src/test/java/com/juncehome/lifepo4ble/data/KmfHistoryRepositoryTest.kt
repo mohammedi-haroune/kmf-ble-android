@@ -127,5 +127,25 @@ class KmfHistoryRepositoryTest {
             emptyList()
 
         override suspend fun deleteAll() = Unit
+
+        override fun observeLatestId(): Flow<Long?> = emptyFlow()
+
+        override suspend fun count(): Long = 0L
+
+        override suspend fun earliestTimestampMs(): Long? = null
+
+        override suspend fun readBetween(fromMs: Long, toMs: Long, limit: Int): List<KmfBatterySampleEntity> =
+            emptyList()
+
+        override suspend fun readLatestBetween(fromMs: Long, toMs: Long): KmfBatterySampleEntity? = null
+
+        override suspend fun readBuckets(fromMs: Long, toMs: Long, bucketMs: Long): List<KmfSampleBucketRow> =
+            emptyList()
+
+        override suspend fun readFirstCounters(fromMs: Long, toMs: Long, bucketMs: Long): List<KmfCounterEdgeRow> =
+            emptyList()
+
+        override suspend fun readLastCounters(fromMs: Long, toMs: Long, bucketMs: Long): List<KmfCounterEdgeRow> =
+            emptyList()
     }
 }

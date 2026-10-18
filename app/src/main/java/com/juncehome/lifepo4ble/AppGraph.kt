@@ -17,12 +17,15 @@ import com.juncehome.lifepo4ble.collection.CompanionAssociationGateway
 import com.juncehome.lifepo4ble.collection.CollectionController
 import com.juncehome.lifepo4ble.collection.CollectionControllerImpl
 import com.juncehome.lifepo4ble.collection.CollectionConfiguration
+import com.juncehome.lifepo4ble.collection.CollectionStatusRelay
 import com.juncehome.lifepo4ble.collection.AndroidCollectionServiceCommander
 import com.juncehome.lifepo4ble.collection.AutonomousCollectionDisabler
 import com.juncehome.lifepo4ble.data.DeviceStore
 import com.juncehome.lifepo4ble.data.KmfDatabase
 import com.juncehome.lifepo4ble.data.KmfBatteryHistoryExporter
 import com.juncehome.lifepo4ble.data.KmfHistoryRepository
+import com.juncehome.lifepo4ble.data.KmfTrendsRepository
+import com.juncehome.lifepo4ble.ui.trends.TrendsViewModel
 import com.juncehome.lifepo4ble.platform.BlePermissionPolicy
 import com.juncehome.lifepo4ble.ui.BleViewModel
 import kotlinx.coroutines.CoroutineScope
@@ -36,6 +39,9 @@ class AppGraph(
     val companionAssociationGateway: CompanionAssociationGateway by lazy {
         AndroidCompanionAssociationGateway(application)
     }
+
+    /** Process-wide view of the service-owned controller state for the UI. */
+    val collectionStatusRelay: CollectionStatusRelay by lazy { CollectionStatusRelay() }
 
     val collectionConfiguration: Flow<CollectionConfiguration?>
         get() = deviceStore.collectionConfiguration
@@ -106,14 +112,21 @@ class AppGraph(
                     repository = repository,
                     deviceStore = deviceStore,
                     historyStore = historyRepository,
-                    batteryHistoryExportStore = batteryHistoryExporter,
                     companionAssociationGateway = companionAssociationGateway,
                     collectionServiceCommander = AndroidCollectionServiceCommander(application),
                     autonomousCollectionDisabler = autonomousCollectionDisabler,
+                    collectionStatus = collectionStatusRelay.state,
                 ) as T
             }
             error("Unknown ViewModel class ${modelClass.name}")
         }
+    }
+
+    val trendsViewModelFactory: ViewModelProvider.Factory by lazy {
+        TrendsViewModel.factory(
+            store = KmfTrendsRepository(database.kmfBatterySampleDao()),
+            exportStore = batteryHistoryExporter,
+        )
     }
 
     private fun hasRequiredBlePermissions(): Boolean =
