@@ -92,7 +92,6 @@ class BatteryCollectionService : Service() {
             autonomousCollectionStopper = (application as BleApplication).graph.autonomousCollectionDisabler,
         )
         CollectionNotification.createChannel(this)
-        promoteToForeground()
         serviceScope.launch {
             controller.state.collect { state ->
                 statusRelay.publish(state)
@@ -105,6 +104,12 @@ class BatteryCollectionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Every startForegroundService() call needs a matching startForeground(), including
+        // commands delivered to an instance that already left the foreground (after STOP or an
+        // ignored command), otherwise Android kills the app with
+        // ForegroundServiceDidNotStartInTimeException.
+        AppLog.d("collection service command action=${intent?.action} startId=$startId", TAG)
+        promoteToForeground()
         if (intent?.action == CollectionServiceAction.STOP) {
             runBlocking(Dispatchers.IO) {
                 commandRouter.route(CollectionServiceCommand.from(intent))
