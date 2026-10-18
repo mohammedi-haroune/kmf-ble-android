@@ -69,11 +69,9 @@ object AppLog {
     }
 
     private class FileLogger(
-        private val file: File,
+        file: File,
     ) : Logger {
-        init {
-            file.parentFile?.mkdirs()
-        }
+        private val log = RotatingLogFile(file)
 
         override fun d(tag: String, message: String) {
             append("D", tag, message)
@@ -91,9 +89,7 @@ object AppLog {
         }
 
         private fun append(level: String, tag: String, message: String) {
-            synchronized(file) {
-                file.appendText("$level/$tag: $message\n")
-            }
+            log.append("$level/$tag: $message\n")
         }
     }
 
