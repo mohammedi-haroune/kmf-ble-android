@@ -55,6 +55,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
@@ -202,30 +203,32 @@ private fun NowHeader(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier
-                .weight(1f, fill = false)
-                .heightIn(min = KmfDimens.MinTouchTarget)
-                .clickable(role = Role.Button, onClickLabel = "Open device settings", onClick = onOpenDevice)
-                .semantics { contentDescription = "$meterName, open device settings" },
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = meterName,
-                style = MaterialTheme.typography.titleLarge,
-                color = colors.textPrimary,
-                maxLines = 1,
-                modifier = Modifier.semantics { heading() },
-            )
-            Icon(
-                imageVector = KmfIcons.ChevronRight,
-                contentDescription = null,
-                tint = colors.textTertiary,
-                modifier = Modifier.size(16.dp),
-            )
+        // Outer row takes the free width so the pill stays pinned right; only the name and chevron are tappable.
+        Row(modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier
+                    .heightIn(min = KmfDimens.MinTouchTarget)
+                    .clickable(role = Role.Button, onClickLabel = "Open device settings", onClick = onOpenDevice)
+                    .semantics { contentDescription = "$meterName, open device settings" },
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = meterName,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = colors.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.semantics { heading() },
+                )
+                Icon(
+                    imageVector = KmfIcons.ChevronRight,
+                    contentDescription = null,
+                    tint = colors.textTertiary,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
         }
-        Spacer(Modifier.weight(0.01f))
         val action = pill.action
         StatusPill(
             label = pill.label,
