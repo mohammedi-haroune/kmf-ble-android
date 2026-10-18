@@ -380,15 +380,12 @@ class BleViewModel(
         commander.reconnectNow()
     }
 
-    /** Now tab "Start": restart the configured service, or run companion setup when not configured. */
+    /**
+     * Now tab "Start": same decision as the Device tab switch, so a meter Android already holds an
+     * association for is re-enabled without showing the association sheet again.
+     */
     fun startCollectionFromNow() {
-        AppLog.d("Now: start collection requested configured=$autonomousCollectionConfigured", TAG)
-        if (autonomousCollectionConfigured) {
-            collectionServiceCommander?.start()
-            collectionServiceCommander?.setVisibility(currentAppVisibility)
-        } else {
-            requestAutonomousCollection()
-        }
+        turnOnCollection(source = "Now")
     }
 
     /** First run step 2 "Select": saves the meter (address and name) without connecting. */
@@ -513,10 +510,14 @@ class BleViewModel(
 
     /** Device tab switch on: restart the service, re-use an existing association, or pair first. */
     fun enableBackgroundCollection() {
+        turnOnCollection(source = "Device")
+    }
+
+    private fun turnOnCollection(source: String) {
         val state = mutableUiState.value
         val associated = lookUpCompanionAssociation(state.savedMeterAddress)
         AppLog.d(
-            "Device: background collection switch on configured=$autonomousCollectionConfigured " +
+            "$source: turn on collection configured=$autonomousCollectionConfigured " +
                 "associated=$associated testActive=${state.testConnectionActive} phase=${state.collectionState?.phase}",
             TAG,
         )
@@ -528,8 +529,11 @@ class BleViewModel(
                 collectionServiceCommander?.start()
                 collectionServiceCommander?.setVisibility(currentAppVisibility)
             }
-            associated -> workScope.launch { enableWithExistingAssociation(source = "Device") }
-            else -> requestAutonomousCollection()
+            associated -> workScope.launch { enableWithExistingAssociation(source = source) }
+            else -> {
+                AppLog.d("$source: no existing association; requesting companion setup", TAG)
+                requestAutonomousCollection()
+            }
         }
     }
 

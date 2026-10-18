@@ -790,6 +790,65 @@ class BleViewModelTest {
     }
 
     @Test
+    fun nowStartAfterStopReusesExistingAssociationWithoutNewPairingSheet() = runTest {
+        val snapshot = configuredSnapshot()
+        val store = FakeDeviceStore(initial = snapshot).apply { enableAutonomousCollection(snapshot, 42) }
+        val gateway = FakeCompanionAssociationGateway().apply { associatedAddresses += snapshot.address }
+        val commander = FakeCollectionServiceCommander()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = BleViewModel(
+            repository = FakeBleRepository(),
+            deviceStore = store,
+            historyStore = FakeHistoryStore(),
+            companionAssociationGateway = gateway,
+            collectionServiceCommander = commander,
+            scope = viewModelScope,
+        )
+
+        try {
+            advanceUntilIdle()
+            viewModel.disableBackgroundCollection()
+            advanceUntilIdle()
+            assertFalse(viewModel.uiState.value.autonomousCollectionConfigured)
+
+            viewModel.startCollectionFromNow()
+            advanceUntilIdle()
+            assertEquals(emptyList<String>(), gateway.associationRequests)
+            assertEquals(listOf(snapshot.address), gateway.observedAddresses)
+            assertEquals("start", commander.commands.last())
+            assertTrue(viewModel.uiState.value.autonomousCollectionConfigured)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun nowStartWithoutAssociationStartsPairing() = runTest {
+        val snapshot = configuredSnapshot()
+        val gateway = FakeCompanionAssociationGateway()
+        val commander = FakeCollectionServiceCommander()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = BleViewModel(
+            repository = FakeBleRepository(),
+            deviceStore = FakeDeviceStore(initial = snapshot),
+            historyStore = FakeHistoryStore(),
+            companionAssociationGateway = gateway,
+            collectionServiceCommander = commander,
+            scope = viewModelScope,
+        )
+
+        try {
+            advanceUntilIdle()
+            viewModel.startCollectionFromNow()
+            advanceUntilIdle()
+            assertEquals(listOf(snapshot.address), gateway.associationRequests)
+            assertEquals(emptyList<String>(), commander.commands)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
     fun forgetMeterStopsCollectionRemovesAssociationAndClearsSetup() = runTest {
         val snapshot = configuredSnapshot()
         val store = FakeDeviceStore(initial = snapshot).apply {
