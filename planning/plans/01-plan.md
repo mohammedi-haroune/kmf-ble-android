@@ -4,7 +4,7 @@
 
 **Goal:** Build a native Kotlin + Jetpack Compose Android app that connects to a KMF meter over BLE, discovers the correct data characteristic at runtime, subscribes to notifications, polls the meter totals command, and displays live KMF readings plus packet logs.
 
-**Project Root:** `/Users/mac/Workspace/junce-home/kmf-ble-android`
+**Project Root:** `/Users/mac/Workspace/kmf-ble-android`
 
 ## Progress
 
@@ -164,7 +164,7 @@ Use `kmf.yml` as the source of truth for v1 data behavior:
 
 - [x] **Step 1: Bootstrap Gradle wrapper in the project root**
 
-Run from `/Users/mac/Workspace/junce-home/kmf-ble-android`:
+Run from `/Users/mac/Workspace/kmf-ble-android`:
 
 ```bash
 gradle wrapper --gradle-version 8.13
