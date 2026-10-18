@@ -39,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -77,6 +78,8 @@ import com.juncehome.lifepo4ble.ui.components.KmfIcons
 import com.juncehome.lifepo4ble.ui.components.StatusPill
 import com.juncehome.lifepo4ble.ui.components.TrendChart
 import com.juncehome.lifepo4ble.ui.components.TrendChartColorMode
+import com.juncehome.lifepo4ble.ui.components.TrendChartMath
+import com.juncehome.lifepo4ble.ui.components.TrendChartYAxisInset
 import com.juncehome.lifepo4ble.ui.components.TrendChartPoint
 import com.juncehome.lifepo4ble.ui.components.ValueWithUnit
 import com.juncehome.lifepo4ble.ui.theme.KmfAccent
@@ -104,6 +107,8 @@ fun NowRoute(
     onOpenDevice: () -> Unit,
     onRetryCollection: () -> Unit,
     onStartCollection: () -> Unit,
+    /** Power chart tap: opens the Trends tab on the live power view. */
+    onOpenTrends: () -> Unit,
     /** NoMeter banner "Set up": opens the first-run flow. */
     onSetUp: () -> Unit = onOpenDevice,
 ) {
@@ -139,6 +144,7 @@ fun NowRoute(
                 NowBannerAction.SetUp -> onSetUp()
             }
         },
+        onOpenTrends = onOpenTrends,
     )
 }
 
@@ -148,6 +154,7 @@ fun NowScreen(
     contentPadding: PaddingValues,
     onOpenDevice: () -> Unit,
     onBannerAction: (NowBannerAction) -> Unit,
+    onOpenTrends: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = KmfTheme.colors
@@ -157,33 +164,32 @@ fun NowScreen(
             .background(colors.background)
             .padding(contentPadding),
     ) {
-        // Column is at least one viewport tall so the weighted spacer pins the totals footer to the bottom
-        // when the content is short; when it overflows, the spacer collapses and the page scrolls normally.
+        // The scrolling column is at least one viewport tall, so the power card can take the
+        // remaining height and TotalsFooter sits at the bottom. Taller content still scrolls.
+        val viewportHeight = maxHeight
         Column(
             modifier = Modifier
+                .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .heightIn(min = maxHeight)
+                .heightIn(min = viewportHeight)
                 .padding(start = KmfDimens.ScreenPadding, end = KmfDimens.ScreenPadding, top = 20.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(KmfDimens.SectionGap),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(KmfDimens.SectionGap)) {
-                NowHeader(model.meterName, model.pill, onOpenDevice, onPillAction = onBannerAction)
-                model.banner?.let { banner ->
-                    Banner(
-                        title = banner.title,
-                        body = banner.body,
-                        tone = banner.tone,
-                        icon = if (banner.tone == BannerTone.Error) KmfIcons.Warning else KmfIcons.BluetoothOff,
-                        actionLabel = banner.action?.label,
-                        onAction = banner.action?.let { action -> { onBannerAction(action) } },
-                    )
-                }
-                SocSection(model)
-                FlowCard(model.flow)
-                PowerChartCard(model.chart)
-                DataLinkCard(model.dataLink)
+            NowHeader(model.meterName, model.pill, onOpenDevice, onPillAction = onBannerAction)
+            model.banner?.let { banner ->
+                Banner(
+                    title = banner.title,
+                    body = banner.body,
+                    tone = banner.tone,
+                    icon = if (banner.tone == BannerTone.Error) KmfIcons.Warning else KmfIcons.BluetoothOff,
+                    actionLabel = banner.action?.label,
+                    onAction = banner.action?.let { action -> { onBannerAction(action) } },
+                )
             }
-            Spacer(Modifier.weight(1f))
-            Spacer(Modifier.height(KmfDimens.SectionGap))
+            SocSection(model)
+            FlowCard(model.flow)
+            PowerChartCard(model.chart, onOpenTrends = onOpenTrends, modifier = Modifier.weight(1f))
+            DataLinkCard(model.dataLink)
             TotalsFooter(model.totalsIn, model.totalsOut)
         }
     }
@@ -494,35 +500,66 @@ private fun waveOpacity(phase: Float): Float = if (phase < 0.35f) {
 }
 
 @Composable
-private fun PowerChartCard(chart: NowChart?) {
+private fun PowerChartCard(chart: NowChart?, onOpenTrends: () -> Unit, modifier: Modifier = Modifier) {
     val colors = KmfTheme.colors
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(KmfDimens.CardRadius))
+            .clickable(
+                role = Role.Button,
+                onClickLabel = "Open Trends",
+                onClick = {
+                    AppLog.d("Now chart tapped, opening Trends", TAG)
+                    onOpenTrends()
+                },
+            )
+            .semantics(mergeDescendants = true) {
+                contentDescription = "Power, last 15 minutes. Open Trends"
+            },
         shape = RoundedCornerShape(KmfDimens.CardRadius),
         color = colors.surface,
     ) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Power \u00b7 last 15 min", style = MaterialTheme.typography.bodySmall, color = colors.textSecondary)
                 Spacer(Modifier.weight(1f))
-                chart?.let { Text(it.meta, style = KmfTheme.numbers.small, color = colors.textSecondary, maxLines = 1) }
+                chart?.let {
+                    Text(it.meta, style = KmfTheme.numbers.small, color = colors.textSecondary, maxLines = 1)
+                    Spacer(Modifier.width(4.dp))
+                }
+                Icon(
+                    imageVector = KmfIcons.ChevronRight,
+                    contentDescription = null,
+                    tint = colors.textTertiary,
+                    modifier = Modifier.size(16.dp),
+                )
             }
             if (chart == null) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(80.dp)
+                        .weight(1f)
+                        .heightIn(min = PowerChartMinHeight)
                         .dashedBorder(colors.border, 10.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text("Chart starts with the first readings", style = MaterialTheme.typography.bodySmall, color = colors.textTertiary)
                 }
             } else {
-                PowerChart(chart)
+                PowerChart(chart, Modifier.weight(1f))
             }
         }
     }
 }
+
+/** Smallest plot height for the Now power chart, so it never collapses on short screens. */
+private val PowerChartMinHeight: Dp = 160.dp
 
 private fun Modifier.dashedBorder(color: Color, radius: Dp): Modifier = drawBehind {
     drawRoundRect(
@@ -533,15 +570,33 @@ private fun Modifier.dashedBorder(color: Color, radius: Dp): Modifier = drawBehi
 }
 
 @Composable
-private fun PowerChart(chart: NowChart) {
-    TrendChart(
-        points = chart.points.map { TrendChartPoint(xFraction = it.xFraction, value = it.powerW) },
-        yMin = -chart.scaleW,
-        yMax = chart.scaleW,
-        colorMode = TrendChartColorMode.Signed,
-        contentDescription = "Power trend chart, charging above the line, discharging below. ${chart.meta}",
-        gapMarker = chart.gapMarker,
-    )
+private fun PowerChart(chart: NowChart, modifier: Modifier) {
+    val colors = KmfTheme.colors
+    val ticks = remember(chart.scaleW) { TrendChartMath.yTicks(-chart.scaleW, chart.scaleW) }
+    val xLabelStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 14.sp)
+    Column(modifier = modifier) {
+        TrendChart(
+            points = chart.points.map { TrendChartPoint(xFraction = it.xFraction, value = it.powerW) },
+            yMin = -chart.scaleW,
+            yMax = chart.scaleW,
+            colorMode = TrendChartColorMode.Signed,
+            contentDescription = "Power trend chart, charging above the line, discharging below. ${chart.meta}",
+            modifier = Modifier.weight(1f),
+            height = null,
+            verticalPadding = 8.dp,
+            yTicks = ticks,
+            gapMarker = chart.gapMarker,
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = TrendChartYAxisInset, end = 4.dp),
+        ) {
+            Text("\u221215 min", style = xLabelStyle, color = colors.textTertiary, maxLines = 1)
+            Spacer(Modifier.weight(1f))
+            Text("now", style = xLabelStyle, color = colors.textTertiary, maxLines = 1)
+        }
+    }
 }
 
 @Composable
@@ -728,6 +783,7 @@ private fun NowPreview(state: BleUiState, charging: Boolean = true) {
             contentPadding = PaddingValues(0.dp),
             onOpenDevice = {},
             onBannerAction = {},
+            onOpenTrends = {},
         )
     }
 }

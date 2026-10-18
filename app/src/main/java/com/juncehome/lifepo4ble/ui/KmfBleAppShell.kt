@@ -36,6 +36,8 @@ import com.juncehome.lifepo4ble.ui.firstrun.FirstRunRoute
 import com.juncehome.lifepo4ble.ui.firstrun.ShellContent
 import com.juncehome.lifepo4ble.ui.now.NowRoute
 import com.juncehome.lifepo4ble.ui.theme.KmfTheme
+import com.juncehome.lifepo4ble.ui.trends.TrendsMetric
+import com.juncehome.lifepo4ble.ui.trends.TrendsRange
 import com.juncehome.lifepo4ble.ui.trends.TrendsRoute
 import com.juncehome.lifepo4ble.ui.trends.TrendsViewModel
 
@@ -131,6 +133,8 @@ private fun KmfTabsShell(
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination
     val recentBatterySamples by viewModel.recentBatterySamples.collectAsStateWithLifecycle()
+    // Set by the Now power chart tap; consumed by the Trends tab to show Live + Power.
+    var trendsLiveRequested by rememberSaveable { mutableStateOf(false) }
 
     val currentRoute = currentDestination?.route
     LaunchedEffect(currentRoute) {
@@ -188,11 +192,29 @@ private fun KmfTabsShell(
                     onSetUp = { onOpenFirstRun("Now tab Set up") },
                     onRetryCollection = viewModel::retryCollectionNow,
                     onStartCollection = viewModel::startCollectionFromNow,
+                    onOpenTrends = {
+                        AppLog.d("Navigation: Now chart opening Trends live power")
+                        trendsLiveRequested = true
+                        navController.navigate(TopLevelDestination.Trends.route) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
                 )
             }
             composable(TopLevelDestination.Trends.route) {
                 val application = LocalContext.current.applicationContext as BleApplication
                 val trendsViewModel: TrendsViewModel = viewModel(factory = application.graph.trendsViewModelFactory)
+                LaunchedEffect(trendsLiveRequested) {
+                    if (trendsLiveRequested) {
+                        trendsViewModel.selectMetric(TrendsMetric.Power)
+                        trendsViewModel.selectRange(TrendsRange.Live)
+                        trendsLiveRequested = false
+                    }
+                }
                 TrendsRoute(viewModel = trendsViewModel, contentPadding = innerPadding)
             }
             composable(TopLevelDestination.Device.route) {
