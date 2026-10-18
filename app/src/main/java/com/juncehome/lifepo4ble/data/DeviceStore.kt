@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.juncehome.lifepo4ble.collection.CollectionConfiguration
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 
 interface DeviceSnapshotStore {
@@ -22,6 +23,12 @@ interface DeviceSnapshotStore {
     suspend fun disableAutonomousCollection()
 
     suspend fun clear()
+
+    /** True once the first-run flow was finished; cleared with the saved meter. */
+    val firstRunCompleted: Flow<Boolean>
+        get() = flowOf(false)
+
+    suspend fun setFirstRunCompleted(completed: Boolean) = Unit
 }
 
 class DeviceStore(
@@ -35,6 +42,20 @@ class DeviceStore(
         val snapshot = preferences.toSnapshot() ?: return@map null
         val autonomousEnabled = preferences[AUTONOMOUS_ENABLED] ?: return@map null
         CollectionConfiguration(snapshot, preferences[ASSOCIATION_ID], autonomousEnabled)
+    }
+
+    override val firstRunCompleted: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[FIRST_RUN_COMPLETED] ?: false
+    }
+
+    override suspend fun setFirstRunCompleted(completed: Boolean) {
+        dataStore.edit { preferences ->
+            if (completed) {
+                preferences[FIRST_RUN_COMPLETED] = true
+            } else {
+                preferences.remove(FIRST_RUN_COMPLETED)
+            }
+        }
     }
 
     override suspend fun save(snapshot: DeviceSnapshot) {
@@ -71,6 +92,7 @@ class DeviceStore(
             preferences.remove(WRITE_UUID)
             preferences.remove(ASSOCIATION_ID)
             preferences.remove(AUTONOMOUS_ENABLED)
+            preferences.remove(FIRST_RUN_COMPLETED)
         }
     }
 
@@ -112,5 +134,6 @@ class DeviceStore(
         val WRITE_UUID = stringPreferencesKey("write_uuid")
         val ASSOCIATION_ID = intPreferencesKey("companion_association_id")
         val AUTONOMOUS_ENABLED = booleanPreferencesKey("autonomous_collection_enabled")
+        val FIRST_RUN_COMPLETED = booleanPreferencesKey("first_run_completed")
     }
 }

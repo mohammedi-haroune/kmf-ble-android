@@ -25,6 +25,15 @@ import kotlinx.coroutines.launch
 
 enum class CollectionVisibility { FOREGROUND, BACKGROUND }
 
+/** Follow-up polling cadence of the collection service; the Device tab shows these values. */
+object CollectionCadence {
+    /** While an activity is visible. */
+    const val FOREGROUND_POLL_INTERVAL_MS = 30_000L
+
+    /** While the app is in the background. */
+    const val BACKGROUND_POLL_INTERVAL_MS = 300_000L
+}
+
 enum class CollectionPhase { STOPPED, WAITING_FOR_DEVICE, CONNECTING, BOOTSTRAPPING, COLLECTING, ERROR }
 
 data class CollectionState(
@@ -33,6 +42,12 @@ data class CollectionState(
     val deviceAddress: String? = null,
     val nextReconnectDelayMs: Long? = null,
     val error: String? = null,
+    /** Wall-clock time of the scheduled retry while [phase] is ERROR; null when none is pending. */
+    val nextReconnectAtMs: Long? = null,
+    /** 1-based number of the reconnect attempt in the current failure streak; 0 while healthy. */
+    val reconnectAttempt: Int = 0,
+    /** When the link first dropped in the current failure streak; cleared once collecting again. */
+    val linkDroppedAtMs: Long? = null,
 )
 
 interface CollectionController {
@@ -47,6 +62,9 @@ interface CollectionController {
     fun onDeviceDisappeared(address: String)
 
     fun stopByUser()
+
+    /** User-requested immediate reconnect from the Now tab; only acts while a retry is pending (ERROR). */
+    fun reconnectNow()
 
     fun close()
 }
@@ -77,6 +95,8 @@ class CollectionControllerImpl(
     private var deviceUnavailable = false
     private var stoppedByUser = false
     private var reconnectAttempt = 0
+    private var failureStreak = 0
+    private var linkDroppedAtMs: Long? = null
     private var parser = KmfLineParser()
     private var reading = KmfReading()
     private var profile: GattProfile? = null
@@ -96,6 +116,8 @@ class CollectionControllerImpl(
         stoppedByUser = false
         deviceUnavailable = false
         reconnectAttempt = 0
+        failureStreak = 0
+        linkDroppedAtMs = null
         resetProtocolSession()
 
         if (!configuration.autonomousEnabled) {
@@ -143,6 +165,22 @@ class CollectionControllerImpl(
         cancelCollectionJobs()
         repository.disconnect()
         updateState(CollectionPhase.STOPPED)
+    }
+
+    override fun reconnectNow() {
+        val phase = mutableState.value.phase
+        if (configuration == null || stoppedByUser) {
+            AppLog.w("collection reconnectNow ignored: collection is stopped (phase=$phase)", TAG)
+            return
+        }
+        if (phase != CollectionPhase.ERROR) {
+            AppLog.d("collection reconnectNow ignored in phase=$phase", TAG)
+            return
+        }
+        AppLog.d("collection reconnectNow: cancelling scheduled retry attempt=$failureStreak and connecting", TAG)
+        cancelReconnect()
+        deviceUnavailable = false
+        connectConfiguredDevice()
     }
 
     override fun close() {
@@ -230,6 +268,8 @@ class CollectionControllerImpl(
         )
         if (hasAFrame && hasBFrame && mutableState.value.phase != CollectionPhase.COLLECTING) {
             reconnectAttempt = 0
+            failureStreak = 0
+            linkDroppedAtMs = null
             cancelReconnect()
             bootstrapJob?.cancel()
             bootstrapJob = null
@@ -241,13 +281,8 @@ class CollectionControllerImpl(
     private fun startBootstrap() {
         cancelBootstrapAndPolling()
         bootstrapJob = workScope.launch {
-            delay(INITIAL_BOOTSTRAP_DELAY_MS)
-            if (!isActive || mutableState.value.phase != CollectionPhase.BOOTSTRAPPING) return@launch
-            repository.requestMtu(PREFERRED_MTU)
-            delay(POST_MTU_DELAY_MS)
-            while (isActive && mutableState.value.phase == CollectionPhase.BOOTSTRAPPING) {
-                repository.write(KMF_BOOTSTRAP_REQUEST)
-                delay(BOOTSTRAP_RETRY_DELAY_MS)
+            KmfBootstrapSequence.run(repository, source = "collection") {
+                mutableState.value.phase == CollectionPhase.BOOTSTRAPPING
             }
         }
     }
@@ -270,7 +305,16 @@ class CollectionControllerImpl(
         }
         val delayMs = RECONNECT_DELAYS_MS[reconnectAttempt]
         reconnectAttempt = (reconnectAttempt + 1).coerceAtMost(RECONNECT_DELAYS_MS.lastIndex)
-        updateState(CollectionPhase.ERROR, nextReconnectDelayMs = delayMs, error = error)
+        failureStreak += 1
+        val nowMs = clock()
+        if (linkDroppedAtMs == null) linkDroppedAtMs = nowMs
+        AppLog.d("collection reconnect scheduled attempt=$failureStreak delayMs=$delayMs error=$error", TAG)
+        updateState(
+            CollectionPhase.ERROR,
+            nextReconnectDelayMs = delayMs,
+            error = error,
+            nextReconnectAtMs = nowMs + delayMs,
+        )
         reconnectJob = workScope.launch {
             delay(delayMs)
             if (isActive && configuration != null && !stoppedByUser && !deviceUnavailable) {
@@ -343,26 +387,34 @@ class CollectionControllerImpl(
         phase: CollectionPhase,
         nextReconnectDelayMs: Long? = null,
         error: String? = null,
+        nextReconnectAtMs: Long? = null,
     ) {
-        mutableState.value = CollectionState(
+        val previous = mutableState.value
+        val next = CollectionState(
             phase = phase,
-            visibility = mutableState.value.visibility,
+            visibility = previous.visibility,
             deviceAddress = configuration?.snapshot?.address,
             nextReconnectDelayMs = nextReconnectDelayMs,
             error = error,
+            nextReconnectAtMs = nextReconnectAtMs,
+            reconnectAttempt = failureStreak,
+            linkDroppedAtMs = linkDroppedAtMs,
         )
+        if (previous.phase != next.phase) {
+            AppLog.d(
+                "collection phase ${previous.phase} -> ${next.phase} attempt=${next.reconnectAttempt} " +
+                    "nextReconnectAtMs=${next.nextReconnectAtMs} error=${next.error}",
+                TAG,
+            )
+        }
+        mutableState.value = next
     }
 
     private companion object {
         const val TAG = "KMF-BLE"
-        const val PREFERRED_MTU = 100
-        const val INITIAL_BOOTSTRAP_DELAY_MS = 1_000L
-        const val POST_MTU_DELAY_MS = 500L
-        const val BOOTSTRAP_RETRY_DELAY_MS = 2_000L
-        const val FOREGROUND_POLL_INTERVAL_MS = 30_000L
-        const val BACKGROUND_POLL_INTERVAL_MS = 300_000L
+        const val FOREGROUND_POLL_INTERVAL_MS = CollectionCadence.FOREGROUND_POLL_INTERVAL_MS
+        const val BACKGROUND_POLL_INTERVAL_MS = CollectionCadence.BACKGROUND_POLL_INTERVAL_MS
         val RECONNECT_DELAYS_MS = longArrayOf(1_000L, 2_000L, 5_000L, 15_000L, 30_000L, 60_000L)
-        val KMF_BOOTSTRAP_REQUEST = byteArrayOf(0x3A, 0x2A)
         val KMF_TOTALS_POLL = byteArrayOf(0x3A, 0x43, 0x0A)
     }
 }

@@ -34,6 +34,15 @@ interface CompanionAssociationGateway {
     fun startPresenceObservation(address: String)
 
     fun stopPresenceObservation(address: String)
+
+    /**
+     * True when Android currently holds a companion association for [address]. Defaults to false
+     * for gateways that cannot query the platform.
+     */
+    fun isAssociated(address: String): Boolean = false
+
+    /** Removes Android's companion association for [address] ("Forget meter"). No-op by default. */
+    fun disassociate(address: String) = Unit
 }
 
 enum class CompanionAssociationTransport { BLUETOOTH_LE }
@@ -203,6 +212,46 @@ class AndroidCompanionAssociationGateway(
             }
         } catch (error: DeviceNotAssociatedException) {
             throw CompanionReSetupRequiredException(address, error)
+        }
+    }
+
+    override fun isAssociated(address: String): Boolean {
+        if (!isSupported()) return false
+        return try {
+            val associated = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                companionDeviceManager.myAssociations.any { association ->
+                    association.deviceMacAddress?.toString()?.equals(address, ignoreCase = true) == true
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                companionDeviceManager.associations.any { it.equals(address, ignoreCase = true) }
+            }
+            AppLog.d("CDM association lookup: associated=$associated api=${Build.VERSION.SDK_INT}")
+            associated
+        } catch (error: Throwable) {
+            AppLog.e("CDM association lookup failed; treating meter as not associated", error)
+            false
+        }
+    }
+
+    override fun disassociate(address: String) {
+        if (!isSupported()) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val ids = companionDeviceManager.myAssociations
+                .filter { association ->
+                    association.deviceMacAddress?.toString()?.equals(address, ignoreCase = true) == true
+                }
+                .map { it.id }
+            ids.forEach(companionDeviceManager::disassociate)
+            AppLog.d("CDM disassociate: removed ${ids.size} association(s) api=${Build.VERSION.SDK_INT}")
+        } else {
+            @Suppress("DEPRECATION")
+            val associated = companionDeviceManager.associations.any { it.equals(address, ignoreCase = true) }
+            if (associated) {
+                @Suppress("DEPRECATION")
+                companionDeviceManager.disassociate(address)
+            }
+            AppLog.d("CDM disassociate: legacy removed=$associated api=${Build.VERSION.SDK_INT}")
         }
     }
 

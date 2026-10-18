@@ -31,4 +31,28 @@ class BlePermissionPolicyTest {
                 .contains(android.Manifest.permission.POST_NOTIFICATIONS),
         )
     }
+
+    @Test
+    fun bluetoothPermissionsExcludeNotifications() {
+        assertEquals(
+            setOf(
+                android.Manifest.permission.BLUETOOTH_SCAN,
+                android.Manifest.permission.BLUETOOTH_CONNECT,
+            ),
+            BlePermissionPolicy.bluetoothPermissions(33),
+        )
+        assertEquals(
+            setOf(android.Manifest.permission.ACCESS_FINE_LOCATION),
+            BlePermissionPolicy.bluetoothPermissions(30),
+        )
+    }
+
+    @Test
+    fun notificationPermissionOnlyFromApi33() {
+        assertEquals(null, BlePermissionPolicy.notificationPermission(32))
+        assertEquals(
+            android.Manifest.permission.POST_NOTIFICATIONS,
+            BlePermissionPolicy.notificationPermission(33),
+        )
+    }
 }

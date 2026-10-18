@@ -21,6 +21,7 @@ object CollectionServiceAction {
     const val DEVICE_APPEARED = "com.juncehome.lifepo4ble.collection.DEVICE_APPEARED"
     const val DEVICE_DISAPPEARED = "com.juncehome.lifepo4ble.collection.DEVICE_DISAPPEARED"
     const val VISIBILITY_CHANGED = "com.juncehome.lifepo4ble.collection.VISIBILITY_CHANGED"
+    const val RECONNECT_NOW = "com.juncehome.lifepo4ble.collection.RECONNECT_NOW"
 }
 
 class CollectionServiceCommandRouter(
@@ -42,6 +43,10 @@ class CollectionServiceCommandRouter(
             }
             CollectionServiceAction.VISIBILITY_CHANGED -> {
                 command.visibility?.let(controller::setVisibility)
+            }
+            CollectionServiceAction.RECONNECT_NOW -> {
+                AppLog.d("collection service: reconnect-now command received", TAG)
+                controller.reconnectNow()
             }
             null -> Unit
             else -> AppLog.w("ignored unknown collection service action=${command.action}", TAG)
@@ -74,11 +79,14 @@ class BatteryCollectionService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var controller: CollectionController
     private lateinit var commandRouter: CollectionServiceCommandRouter
+    private lateinit var statusRelay: CollectionStatusRelay
     private var startedConfiguration: CollectionConfiguration? = null
 
     override fun onCreate() {
         super.onCreate()
-        controller = (application as BleApplication).graph.createCollectionController(serviceScope)
+        val graph = (application as BleApplication).graph
+        controller = graph.createCollectionController(serviceScope)
+        statusRelay = graph.collectionStatusRelay
         commandRouter = CollectionServiceCommandRouter(
             controller = controller,
             autonomousCollectionStopper = (application as BleApplication).graph.autonomousCollectionDisabler,
@@ -87,6 +95,7 @@ class BatteryCollectionService : Service() {
         promoteToForeground()
         serviceScope.launch {
             controller.state.collect { state ->
+                statusRelay.publish(state)
                 getSystemService(android.app.NotificationManager::class.java).notify(
                     CollectionNotification.NOTIFICATION_ID,
                     CollectionNotification.build(this@BatteryCollectionService, state),
@@ -131,6 +140,7 @@ class BatteryCollectionService : Service() {
 
     override fun onDestroy() {
         controller.close()
+        statusRelay.publish(controller.state.value)
         serviceScope.cancel()
         super.onDestroy()
     }

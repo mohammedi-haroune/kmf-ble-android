@@ -160,6 +160,82 @@ class CollectionControllerTest {
     }
 
     @Test
+    fun scheduledReconnectExposesAttemptRetryTimeAndDropTime() = runTest {
+        val fixture = fixture(testScheduler)
+        try {
+            fixture.controller.start(configuration)
+            fixture.repository.emit(BleEvent.Disconnected("out of range"))
+
+            val first = fixture.controller.state.value
+            assertEquals(CollectionPhase.ERROR, first.phase)
+            assertEquals(1, first.reconnectAttempt)
+            assertEquals(42L + 1_000L, first.nextReconnectAtMs)
+            assertEquals(42L, first.linkDroppedAtMs)
+            assertEquals("out of range", first.error)
+
+            advanceTimeBy(1_000)
+            runCurrent()
+            assertEquals(CollectionPhase.CONNECTING, fixture.controller.state.value.phase)
+            assertNull(fixture.controller.state.value.nextReconnectAtMs)
+            fixture.repository.emit(BleEvent.Disconnected("again"))
+            val second = fixture.controller.state.value
+            assertEquals(2, second.reconnectAttempt)
+            assertEquals(42L + 2_000L, second.nextReconnectAtMs)
+
+            fixture.emitReadyAAndBFrames()
+            val collecting = fixture.controller.state.value
+            assertEquals(CollectionPhase.COLLECTING, collecting.phase)
+            assertEquals(0, collecting.reconnectAttempt)
+            assertNull(collecting.linkDroppedAtMs)
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test
+    fun reconnectNowSkipsPendingBackoff() = runTest {
+        val fixture = fixture(testScheduler)
+        try {
+            fixture.controller.start(configuration)
+            fixture.repository.emit(BleEvent.Disconnected("out of range"))
+            advanceTimeBy(1_000)
+            runCurrent()
+            fixture.repository.emit(BleEvent.Disconnected("out of range"))
+            assertEquals(2, fixture.repository.connectCalls.size)
+
+            fixture.controller.reconnectNow()
+            runCurrent()
+            assertEquals(3, fixture.repository.connectCalls.size)
+            assertEquals(CollectionPhase.CONNECTING, fixture.controller.state.value.phase)
+
+            // The cancelled 2 s retry must not fire a second connect.
+            advanceTimeBy(5_000)
+            runCurrent()
+            assertEquals(3, fixture.repository.connectCalls.size)
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test
+    fun reconnectNowIgnoredWhenNotInError() = runTest {
+        val fixture = fixture(testScheduler)
+        try {
+            fixture.controller.start(configuration)
+            fixture.emitReadyAAndBFrames()
+            fixture.controller.reconnectNow()
+            assertEquals(1, fixture.repository.connectCalls.size)
+
+            fixture.controller.stopByUser()
+            fixture.controller.reconnectNow()
+            assertEquals(1, fixture.repository.connectCalls.size)
+            assertEquals(CollectionPhase.STOPPED, fixture.controller.state.value.phase)
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test
     fun reconnectWithOnlyFreshAFrameKeepsBootstrapRunning() = runTest {
         val fixture = fixture(testScheduler)
         try {

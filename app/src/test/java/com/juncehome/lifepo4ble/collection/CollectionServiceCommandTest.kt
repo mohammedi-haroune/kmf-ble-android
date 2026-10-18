@@ -59,6 +59,13 @@ class CollectionServiceCommandTest {
     }
 
     @Test
+    fun reconnectNowRoutesToController() = runTest {
+        router.route(CollectionServiceCommand(action = CollectionServiceAction.RECONNECT_NOW))
+
+        assertEquals(1, fakeController.reconnectNowCalls)
+    }
+
+    @Test
     fun visibilityExtraRoutesToController() = runTest {
         router.route(
             CollectionServiceCommand(
@@ -80,6 +87,7 @@ class CollectionServiceCommandTest {
         val disappearedAddresses = mutableListOf<String>()
         val visibilities = mutableListOf<CollectionVisibility>()
         var userStops = 0
+        var reconnectNowCalls = 0
 
         override fun start(configuration: CollectionConfiguration) = Unit
 
@@ -98,6 +106,10 @@ class CollectionServiceCommandTest {
         override fun stopByUser() {
             userStops += 1
             operationLog?.add("controller-stop")
+        }
+
+        override fun reconnectNow() {
+            reconnectNowCalls += 1
         }
 
         override fun close() = Unit

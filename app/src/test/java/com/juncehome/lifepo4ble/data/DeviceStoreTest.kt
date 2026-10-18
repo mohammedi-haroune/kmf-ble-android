@@ -106,4 +106,17 @@ class DeviceStoreTest {
         assertEquals(snapshot, store.snapshot.first())
         assertNull(store.collectionConfiguration.first())
     }
+
+    @Test
+    fun firstRunCompletionPersistsAndIsClearedWithTheMeter() = runTest {
+        val file = temporaryFolder.newFile("device.preferences_pb")
+        val dataStore = PreferenceDataStoreFactory.create(scope = backgroundScope) { file }
+        val store = DeviceStore(dataStore)
+
+        assertEquals(false, store.firstRunCompleted.first())
+        store.setFirstRunCompleted(true)
+        assertEquals(true, store.firstRunCompleted.first())
+        store.clear()
+        assertEquals(false, store.firstRunCompleted.first())
+    }
 }
