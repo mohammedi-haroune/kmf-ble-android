@@ -8,14 +8,17 @@ import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -23,14 +26,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.juncehome.lifepo4ble.ui.theme.KmfAccent
 import com.juncehome.lifepo4ble.ui.theme.KmfBleTheme
+import com.juncehome.lifepo4ble.ui.theme.KmfDimens
 import com.juncehome.lifepo4ble.ui.theme.KmfTheme
 
 /** Dot behaviour from the Now board (`dotClass`). */
@@ -62,33 +69,57 @@ fun StatusPill(
     modifier: Modifier = Modifier,
     indicator: StatusPillIndicator = StatusPillIndicator.Steady,
     contentDescription: String? = null,
+    icon: ImageVector? = null,
+    onClick: (() -> Unit)? = null,
+    onClickLabel: String? = null,
 ) {
-    Row(
-        modifier = modifier
-            .background(accent.pillFill, RoundedCornerShape(percent = 50))
-            .padding(horizontal = 12.dp, vertical = 7.dp)
-            .then(
-                if (contentDescription != null) {
-                    Modifier.semantics { this.contentDescription = contentDescription }
-                } else {
-                    Modifier
-                },
-            ),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (indicator != StatusPillIndicator.None) {
-            StatusDot(
-                color = accent.accent,
-                indicator = if (KmfTheme.reduceMotion) StatusPillIndicator.Steady else indicator,
+    val pill: @Composable () -> Unit = {
+        Row(
+            modifier = Modifier
+                .background(accent.pillFill, RoundedCornerShape(percent = 50))
+                .padding(horizontal = 12.dp, vertical = 7.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (indicator != StatusPillIndicator.None) {
+                StatusDot(
+                    color = accent.accent,
+                    indicator = if (KmfTheme.reduceMotion) StatusPillIndicator.Steady else indicator,
+                )
+            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
+                color = accent.onTint,
+                maxLines = 1,
             )
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = accent.onTint,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
         }
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = accent.onTint,
-            maxLines = 1,
-        )
+    }
+    val described = if (contentDescription != null) {
+        Modifier.semantics { this.contentDescription = contentDescription }
+    } else {
+        Modifier
+    }
+    if (onClick != null) {
+        // Whole pill is the button; the outer box guarantees the 44 dp touch target.
+        Box(
+            modifier = modifier
+                .heightIn(min = KmfDimens.MinTouchTarget)
+                .clip(RoundedCornerShape(percent = 50))
+                .clickable(role = Role.Button, onClickLabel = onClickLabel, onClick = onClick)
+                .then(described),
+            contentAlignment = Alignment.Center,
+        ) { pill() }
+    } else {
+        Box(modifier = modifier.then(described)) { pill() }
     }
 }
 

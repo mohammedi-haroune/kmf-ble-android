@@ -7,7 +7,6 @@ import com.juncehome.lifepo4ble.collection.CollectionVisibility
 import com.juncehome.lifepo4ble.data.KmfBatterySampleEntity
 import com.juncehome.lifepo4ble.protocol.KmfReading
 import com.juncehome.lifepo4ble.ui.BleUiState
-import com.juncehome.lifepo4ble.ui.components.BannerTone
 import com.juncehome.lifepo4ble.ui.components.StatusPillIndicator
 import java.time.ZoneId
 import org.junit.Assert.assertEquals
@@ -189,15 +188,16 @@ class NowScreenReducerTest {
         )
 
         assertEquals(NowDisplayState.Reconnecting, model.displayState)
-        assertEquals("Reconnecting", model.pill.label)
+        assertEquals("Reconnecting \u00b7 15 s", model.pill.label)
         assertEquals(StatusPillIndicator.Blink, model.pill.indicator)
-        val banner = requireNotNull(model.banner)
-        assertEquals("Reconnecting in 15 s", banner.title)
-        assertEquals("Link dropped at 14:31 \u00b7 attempt 4", banner.body)
-        assertEquals(BannerTone.Warning, banner.tone)
-        assertEquals(NowBannerAction.RetryNow, banner.action)
-        assertEquals("Charging at 14:31", model.flow.label)
-        assertEquals("Estimate paused", model.flow.eta)
+        assertEquals(NowTone.Discharge, model.pill.tone)
+        assertEquals(NowBannerAction.RetryNow, model.pill.action)
+        assertEquals(NowPillIcon.Retry, model.pill.icon)
+        assertEquals("Reconnecting in 15 seconds, retry now", model.pill.contentDescription)
+        assertNull(model.banner)
+        assertEquals("Link dropped at 14:31 \u00b7 attempt 4", model.dataLink.statusNote)
+        assertEquals("Charging", model.flow.label)
+        assertEquals("Last reading 14:31", model.flow.eta)
         assertEquals(NowCellAnimation.None, model.flow.animation)
         assertEquals("82", model.soc)
         assertEquals("no link", model.dataLink.stat)
@@ -213,7 +213,7 @@ class NowScreenReducerTest {
         assertEquals(0, NowScreenReducer.reconnectCountdownSeconds(collection, now + 5_000L))
 
         val overdue = reduce(state(phase = CollectionPhase.ERROR, nextReconnectAtMs = now - 10L, attempt = 1))
-        assertEquals("Reconnecting\u2026", overdue.banner?.title)
+        assertEquals("Reconnecting\u2026", overdue.pill.label)
     }
 
     @Test
@@ -223,11 +223,10 @@ class NowScreenReducerTest {
         assertEquals(NowDisplayState.OutOfRange, model.displayState)
         assertEquals("Out of range", model.pill.label)
         assertEquals(NowTone.Neutral, model.pill.tone)
-        val banner = requireNotNull(model.banner)
-        assertEquals("Meter out of range", banner.title)
-        assertEquals("Reconnects by itself when it is back \u00b7 last 14:31", banner.body)
-        assertEquals(BannerTone.Neutral, banner.tone)
-        assertNull(banner.action)
+        assertNull(model.pill.action)
+        assertNull(model.banner)
+        assertEquals("Reconnects by itself when it is back \u00b7 last 14:31", model.dataLink.statusNote)
+        assertEquals(NowTone.Neutral, model.dataLink.statusNoteTone)
     }
 
     @Test
@@ -235,13 +234,13 @@ class NowScreenReducerTest {
         val model = reduce(state(phase = CollectionPhase.ERROR, error = "Could not turn on meter notifications"))
 
         assertEquals(NowDisplayState.CollectionError, model.displayState)
-        assertEquals("Paused", model.pill.label)
+        assertEquals("Paused \u00b7 Retry", model.pill.label)
         assertEquals(NowTone.Error, model.pill.tone)
-        val banner = requireNotNull(model.banner)
-        assertEquals("Collection paused", banner.title)
-        assertEquals("Could not turn on meter notifications", banner.body)
-        assertEquals(BannerTone.Error, banner.tone)
-        assertEquals(NowBannerAction.Retry, banner.action)
+        assertEquals(NowBannerAction.Retry, model.pill.action)
+        assertEquals(NowPillIcon.Retry, model.pill.icon)
+        assertNull(model.banner)
+        assertEquals("Could not turn on meter notifications", model.dataLink.statusNote)
+        assertEquals(NowTone.Error, model.dataLink.statusNoteTone)
     }
 
     @Test
@@ -249,11 +248,14 @@ class NowScreenReducerTest {
         val model = reduce(state(phase = CollectionPhase.STOPPED, frameAgeMs = 60_000L))
 
         assertEquals(NowDisplayState.CollectionOff, model.displayState)
-        assertEquals("Off", model.pill.label)
-        val banner = requireNotNull(model.banner)
-        assertEquals("Background collection is off", banner.title)
-        assertEquals(NowBannerAction.Start, banner.action)
-        assertEquals("No new readings while off", model.flow.eta)
+        assertEquals("Off \u00b7 Start", model.pill.label)
+        assertEquals(NowTone.Neutral, model.pill.tone)
+        assertEquals(NowBannerAction.Start, model.pill.action)
+        assertEquals(NowPillIcon.Play, model.pill.icon)
+        assertNull(model.banner)
+        assertEquals("Stopped from the notification \u00b7 last 14:31", model.dataLink.statusNote)
+        assertEquals("82", model.soc)
+        assertEquals("Last reading 14:31", model.flow.eta)
     }
 
     @Test

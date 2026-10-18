@@ -115,7 +115,8 @@ fun NowRoute(
     }
     LaunchedEffect(model.displayState) {
         AppLog.d(
-            "Now: display state=${model.displayState} pill='${model.pill.label}' banner='${model.banner?.title}' " +
+            "Now: display state=${model.displayState} pill='${model.pill.label}' pillAction=${model.pill.action} " +
+                "statusNote='${model.dataLink.statusNote}' banner='${model.banner?.title}' " +
                 "phase=${state.collectionState?.phase} hasValues=${model.hasValues}",
             TAG,
         )
@@ -156,7 +157,7 @@ fun NowScreen(
             .padding(start = KmfDimens.ScreenPadding, end = KmfDimens.ScreenPadding, top = 20.dp, bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(KmfDimens.SectionGap),
     ) {
-        NowHeader(model.meterName, model.pill, onOpenDevice)
+        NowHeader(model.meterName, model.pill, onOpenDevice, onPillAction = onBannerAction)
         model.banner?.let { banner ->
             Banner(
                 title = banner.title,
@@ -189,7 +190,12 @@ private fun NowTone.accent(): KmfAccent {
 }
 
 @Composable
-private fun NowHeader(meterName: String, pill: NowPill, onOpenDevice: () -> Unit) {
+private fun NowHeader(
+    meterName: String,
+    pill: NowPill,
+    onOpenDevice: () -> Unit,
+    onPillAction: (NowBannerAction) -> Unit,
+) {
     val colors = KmfTheme.colors
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -220,7 +226,25 @@ private fun NowHeader(meterName: String, pill: NowPill, onOpenDevice: () -> Unit
             )
         }
         Spacer(Modifier.weight(0.01f))
-        StatusPill(label = pill.label, accent = pill.tone.accent(), indicator = pill.indicator)
+        val action = pill.action
+        StatusPill(
+            label = pill.label,
+            accent = pill.tone.accent(),
+            indicator = pill.indicator,
+            contentDescription = pill.contentDescription,
+            icon = when (pill.icon) {
+                NowPillIcon.Retry -> KmfIcons.Retry
+                NowPillIcon.Play -> KmfIcons.Play
+                NowPillIcon.None -> null
+            },
+            onClick = action?.let { a ->
+                {
+                    AppLog.d("Now: header pill tapped action=$a label='${pill.label}'", TAG)
+                    onPillAction(a)
+                }
+            },
+            onClickLabel = action?.label,
+        )
     }
 }
 
@@ -371,8 +395,8 @@ private fun FlowCard(flow: NowFlow) {
                 animation = flow.animation,
             )
             Column(modifier = Modifier.weight(1f)) {
-                Text(flow.label, style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold), color = accent.accent)
-                Text(flow.eta, style = MaterialTheme.typography.bodySmall, color = colors.textSecondary)
+                Text(flow.label, style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold), color = accent.accent, maxLines = 1)
+                Text(flow.eta, style = MaterialTheme.typography.bodySmall, color = colors.textSecondary, maxLines = 1)
             }
             Column(horizontalAlignment = Alignment.End) {
                 ValueWithUnit(value = flow.power, unit = "W")
@@ -544,6 +568,13 @@ private fun DataLinkCard(link: NowDataLink) {
                     )
                     Text(link.stat, style = KmfTheme.numbers.small, color = colors.textSecondary, maxLines = 1)
                 }
+            }
+            link.statusNote?.let { note ->
+                Text(
+                    text = note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (link.statusNoteTone == NowTone.Neutral) colors.textSecondary else link.statusNoteTone.accent().onTint,
+                )
             }
         }
     }

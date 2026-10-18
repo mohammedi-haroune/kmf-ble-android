@@ -66,6 +66,16 @@ object KmfIcons {
         lineIcon("Bell", "M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3 -2 3 -9", "M10 21h4", strokeWidth = 1.8f)
     }
 
+    /** Status pill: circular retry arrow. */
+    val Retry: ImageVector by lazy {
+        lineIcon("Retry", "M21 12a9 9 0 1 1 -3 -6.7", "M21 4v5h-5")
+    }
+
+    /** Status pill: play triangle. */
+    val Play: ImageVector by lazy {
+        lineIcon("Play", "M7 5l12 7 -12 7z")
+    }
+
     /** First run Done: check mark. */
     val Check: ImageVector by lazy {
         lineIcon("Check", "M5 12l5 5 9 -10")

@@ -60,10 +60,16 @@ enum class NowLinkTick { Received, Missed, Idle }
 /** How the Data link ticks are colored. */
 enum class NowLinkMode { Live, Stale, Sync, Offline }
 
+enum class NowPillIcon { None, Retry, Play }
+
 data class NowPill(
     val label: String,
     val tone: NowTone,
     val indicator: StatusPillIndicator,
+    /** Non-null makes the whole pill a button. */
+    val action: NowBannerAction? = null,
+    val icon: NowPillIcon = NowPillIcon.None,
+    val contentDescription: String? = null,
 )
 
 data class NowBanner(
@@ -107,6 +113,9 @@ data class NowDataLink(
     val stat: String,
     val caption: String?,
     val captionTone: NowTone,
+    /** One-line connection detail at the bottom of the card (offline states); never moves content above it. */
+    val statusNote: String? = null,
+    val statusNoteTone: NowTone = NowTone.Neutral,
 ) {
     val compactTicks: List<NowLinkTick> get() = ticks.takeLast(NowScreenReducer.COMPACT_TICKS)
 }
@@ -184,8 +193,8 @@ object NowScreenReducer {
         return NowScreenState(
             displayState = displayState,
             meterName = state.selectedDevice?.name?.takeIf { it.isNotBlank() } ?: DEFAULT_METER_NAME,
-            pill = pill(displayState, frameAgeMs),
-            banner = banner(displayState, collection, nowMs, zoneId, lastClock),
+            pill = pill(displayState, frameAgeMs, collection, nowMs),
+            banner = banner(displayState),
             hasValues = hasValues,
             soc = if (hasValues) formatNumber(reading.socPercent, 0) else KmfNumberText.MISSING,
             socFraction = if (hasValues) (reading.socPercent / 100.0).coerceIn(0.0, 1.0).toFloat() else 0f,
@@ -201,7 +210,8 @@ object NowScreenReducer {
             lowBatteryDetail = if (lowBattery) lowBatteryDetail(reading) else null,
             flow = flow(displayState, reading, hasValues, nowMs, zoneId, lastClock),
             chart = chart(displayState, samples, nowMs),
-            dataLink = dataLink(displayState, state, nowMs, frameAgeMs),
+            dataLink = dataLink(displayState, state, nowMs, frameAgeMs)
+                .withStatusNote(statusNote(displayState, collection, zoneId, lastClock)),
             totalsIn = if (hasValues) formatNumber(reading.chargeKwh, 2) else KmfNumberText.MISSING,
             totalsOut = if (hasValues) formatNumber(reading.dischargeKwh, 2) else KmfNumberText.MISSING,
         )
@@ -257,7 +267,12 @@ object NowScreenReducer {
     fun isLowBattery(reading: KmfReading, hasValues: Boolean): Boolean =
         hasValues && reading.capacityAh > 0.0 && reading.socPercent < LOW_BATTERY_SOC
 
-    fun pill(displayState: NowDisplayState, frameAgeMs: Long?): NowPill {
+    fun pill(
+        displayState: NowDisplayState,
+        frameAgeMs: Long?,
+        collection: CollectionState? = null,
+        nowMs: Long = 0L,
+    ): NowPill {
         val ageSeconds = ((frameAgeMs ?: 0L) / 1_000L)
         return when (displayState) {
             NowDisplayState.Charging,
@@ -274,10 +289,38 @@ object NowScreenReducer {
             NowDisplayState.Stale -> NowPill("No data $DOT ${ageSeconds}s", NowTone.Discharge, StatusPillIndicator.Steady)
             NowDisplayState.FirstSync,
             NowDisplayState.Resyncing -> NowPill("Syncing", NowTone.Charge, StatusPillIndicator.Blink)
-            NowDisplayState.Reconnecting -> NowPill("Reconnecting", NowTone.Discharge, StatusPillIndicator.Blink)
+            NowDisplayState.Reconnecting -> {
+                val seconds = reconnectCountdownSeconds(collection, nowMs)
+                NowPill(
+                    label = if (seconds > 0) "Reconnecting $DOT $seconds s" else "Reconnecting$ELLIPSIS",
+                    tone = NowTone.Discharge,
+                    indicator = StatusPillIndicator.Blink,
+                    action = NowBannerAction.RetryNow,
+                    icon = NowPillIcon.Retry,
+                    contentDescription = if (seconds > 0) {
+                        "Reconnecting in $seconds seconds, retry now"
+                    } else {
+                        "Reconnecting, retry now"
+                    },
+                )
+            }
             NowDisplayState.OutOfRange -> NowPill("Out of range", NowTone.Neutral, StatusPillIndicator.Steady)
-            NowDisplayState.CollectionError -> NowPill("Paused", NowTone.Error, StatusPillIndicator.Steady)
-            NowDisplayState.CollectionOff -> NowPill("Off", NowTone.Neutral, StatusPillIndicator.Steady)
+            NowDisplayState.CollectionError -> NowPill(
+                label = "Paused $DOT Retry",
+                tone = NowTone.Error,
+                indicator = StatusPillIndicator.Steady,
+                action = NowBannerAction.Retry,
+                icon = NowPillIcon.Retry,
+                contentDescription = "Collection paused, retry",
+            )
+            NowDisplayState.CollectionOff -> NowPill(
+                label = "Off $DOT Start",
+                tone = NowTone.Neutral,
+                indicator = StatusPillIndicator.Steady,
+                action = NowBannerAction.Start,
+                icon = NowPillIcon.Play,
+                contentDescription = "Collection off, start",
+            )
             NowDisplayState.NoMeter -> NowPill("No meter", NowTone.Neutral, StatusPillIndicator.Steady)
         }
     }
@@ -289,57 +332,43 @@ object NowScreenReducer {
         return if (remaining <= 0L) 0 else ceil(remaining / 1_000.0).toInt()
     }
 
-    private fun banner(
+    /** Only NoMeter still uses the inline banner; the four connection states live in the header pill. */
+    private fun banner(displayState: NowDisplayState): NowBanner? = when (displayState) {
+        NowDisplayState.NoMeter -> NowBanner(
+            title = "No meter set up",
+            body = "Find your meter in Device to start collecting",
+            tone = BannerTone.Neutral,
+            action = NowBannerAction.SetUp,
+        )
+        else -> null
+    }
+
+    /** One-line detail for the Data link card (moved out of the old banners). */
+    fun statusNote(
         displayState: NowDisplayState,
         collection: CollectionState?,
-        nowMs: Long,
         zoneId: ZoneId,
         lastClock: String?,
-    ): NowBanner? {
-        val lastSuffix = lastClock?.let { " $DOT last $it" }.orEmpty()
-        return when (displayState) {
-            NowDisplayState.Reconnecting -> {
-                val seconds = reconnectCountdownSeconds(collection, nowMs)
-                val dropped = (collection?.linkDroppedAtMs)?.let { formatClock(it, zoneId) } ?: lastClock
-                val attempt = collection?.reconnectAttempt ?: 0
-                val body = listOfNotNull(
-                    dropped?.let { "Link dropped at $it" },
-                    attempt.takeIf { it > 0 }?.let { "attempt $it" },
-                ).joinToString(" $DOT ").ifEmpty { null }
-                NowBanner(
-                    title = if (seconds > 0) "Reconnecting in $seconds s" else "Reconnecting$ELLIPSIS",
-                    body = body,
-                    tone = BannerTone.Warning,
-                    action = NowBannerAction.RetryNow,
-                )
-            }
-            NowDisplayState.OutOfRange -> NowBanner(
-                title = "Meter out of range",
-                body = "Reconnects by itself when it is back$lastSuffix",
-                tone = BannerTone.Neutral,
-                action = null,
-            )
-            NowDisplayState.CollectionError -> NowBanner(
-                title = "Collection paused",
-                body = collection?.error?.takeIf { it.isNotBlank() } ?: "The meter connection failed",
-                tone = BannerTone.Error,
-                action = NowBannerAction.Retry,
-            )
-            NowDisplayState.CollectionOff -> NowBanner(
-                title = "Background collection is off",
-                body = "Start it to keep saving readings$lastSuffix",
-                tone = BannerTone.Neutral,
-                action = NowBannerAction.Start,
-            )
-            NowDisplayState.NoMeter -> NowBanner(
-                title = "No meter set up",
-                body = "Find your meter in Device to start collecting",
-                tone = BannerTone.Neutral,
-                action = NowBannerAction.SetUp,
-            )
-            else -> null
+    ): Pair<String, NowTone>? = when (displayState) {
+        NowDisplayState.Reconnecting -> {
+            val dropped = collection?.linkDroppedAtMs?.let { formatClock(it, zoneId) } ?: lastClock
+            val attempt = collection?.reconnectAttempt ?: 0
+            listOfNotNull(
+                dropped?.let { "Link dropped at $it" },
+                attempt.takeIf { it > 0 }?.let { "attempt $it" },
+            ).joinToString(" $DOT ").ifEmpty { null }?.let { it to NowTone.Discharge }
         }
+        NowDisplayState.OutOfRange ->
+            "Reconnects by itself when it is back${lastClock?.let { " $DOT last $it" }.orEmpty()}" to NowTone.Neutral
+        NowDisplayState.CollectionError ->
+            (collection?.error?.takeIf { it.isNotBlank() } ?: "The meter connection failed") to NowTone.Error
+        NowDisplayState.CollectionOff ->
+            "Stopped from the notification${lastClock?.let { " $DOT last $it" }.orEmpty()}" to NowTone.Neutral
+        else -> null
     }
+
+    private fun NowDataLink.withStatusNote(note: Pair<String, NowTone>?): NowDataLink =
+        if (note == null) this else copy(statusNote = note.first, statusNoteTone = note.second)
 
     private fun flowTone(reading: KmfReading): NowTone = when {
         reading.currentA < 0.0 -> NowTone.Discharge
@@ -382,8 +411,9 @@ object NowScreenReducer {
         var animation = NowCellAnimation.None
         when {
             displayState.isOffline -> {
-                label = directionLabel(reading) + (lastClock?.let { " at $it" }.orEmpty())
-                eta = if (displayState == NowDisplayState.CollectionOff) "No new readings while off" else "Estimate paused"
+                // Same two single lines as the live card so the offline card keeps its height.
+                label = directionLabel(reading)
+                eta = lastClock?.let { "Last reading $it" } ?: "Estimate paused"
             }
             displayState.isSyncing -> {
                 label = directionLabel(reading)
