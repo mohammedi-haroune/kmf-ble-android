@@ -105,17 +105,13 @@ data class NowChart(
     val endPowerW: Double get() = points.lastOrNull()?.powerW ?: 0.0
 }
 
+/** One fixed-height row in every state; [stat] is the short state label on the right. */
 data class NowDataLink(
-    val expanded: Boolean,
     val mode: NowLinkMode,
     /** 60 one-second buckets, oldest first. */
     val ticks: List<NowLinkTick>,
     val stat: String,
-    val caption: String?,
-    val captionTone: NowTone,
-    /** One-line connection detail at the bottom of the card (offline states); never moves content above it. */
-    val statusNote: String? = null,
-    val statusNoteTone: NowTone = NowTone.Neutral,
+    val statTone: NowTone,
 ) {
     val compactTicks: List<NowLinkTick> get() = ticks.takeLast(NowScreenReducer.COMPACT_TICKS)
 }
@@ -210,8 +206,7 @@ object NowScreenReducer {
             lowBatteryDetail = if (lowBattery) lowBatteryDetail(reading) else null,
             flow = flow(displayState, reading, hasValues, nowMs, zoneId, lastClock),
             chart = chart(displayState, samples, nowMs),
-            dataLink = dataLink(displayState, state, nowMs, frameAgeMs)
-                .withStatusNote(statusNote(displayState, collection, zoneId, lastClock)),
+            dataLink = dataLink(displayState, state, nowMs, frameAgeMs),
             totalsIn = if (hasValues) formatNumber(reading.chargeKwh, 2) else KmfNumberText.MISSING,
             totalsOut = if (hasValues) formatNumber(reading.dischargeKwh, 2) else KmfNumberText.MISSING,
         )
@@ -342,33 +337,6 @@ object NowScreenReducer {
         )
         else -> null
     }
-
-    /** One-line detail for the Data link card (moved out of the old banners). */
-    fun statusNote(
-        displayState: NowDisplayState,
-        collection: CollectionState?,
-        zoneId: ZoneId,
-        lastClock: String?,
-    ): Pair<String, NowTone>? = when (displayState) {
-        NowDisplayState.Reconnecting -> {
-            val dropped = collection?.linkDroppedAtMs?.let { formatClock(it, zoneId) } ?: lastClock
-            val attempt = collection?.reconnectAttempt ?: 0
-            listOfNotNull(
-                dropped?.let { "Link dropped at $it" },
-                attempt.takeIf { it > 0 }?.let { "attempt $it" },
-            ).joinToString(" $DOT ").ifEmpty { null }?.let { it to NowTone.Discharge }
-        }
-        NowDisplayState.OutOfRange ->
-            "Reconnects by itself when it is back${lastClock?.let { " $DOT last $it" }.orEmpty()}" to NowTone.Neutral
-        NowDisplayState.CollectionError ->
-            (collection?.error?.takeIf { it.isNotBlank() } ?: "The meter connection failed") to NowTone.Error
-        NowDisplayState.CollectionOff ->
-            "Stopped from the notification${lastClock?.let { " $DOT last $it" }.orEmpty()}" to NowTone.Neutral
-        else -> null
-    }
-
-    private fun NowDataLink.withStatusNote(note: Pair<String, NowTone>?): NowDataLink =
-        if (note == null) this else copy(statusNote = note.first, statusNoteTone = note.second)
 
     private fun flowTone(reading: KmfReading): NowTone = when {
         reading.currentA < 0.0 -> NowTone.Discharge
@@ -546,52 +514,34 @@ object NowScreenReducer {
         val ticks = linkTicks(times, nowMs, mode)
         val received = ticks.count { it == NowLinkTick.Received }
         val missed = ticks.count { it == NowLinkTick.Missed }
-        val framesInWindow = frameBuckets(times, nowMs).sum()
-        val dataSets = (if (state.hasAFrame) 1 else 0) + (if (state.hasBFrame) 1 else 0)
+        val dataSets = ((if (state.hasAFrame) 1 else 0) + (if (state.hasBFrame) 1 else 0)).coerceAtMost(2)
         val connecting = state.collectionState?.phase == CollectionPhase.CONNECTING ||
             (state.collectionState == null && state.connectionState == ConnectionState.CONNECTING)
-        val syncDetail = if (connecting && dataSets == 0) {
-            "connecting to the meter"
-        } else {
-            "receiving ${dataSets.coerceAtMost(2)} of 2 data sets"
+        val (stat, tone) = when (displayState) {
+            NowDisplayState.Charging,
+            NowDisplayState.Discharging,
+            NowDisplayState.LowBattery ->
+                "$received/$LINK_SECONDS $DOT " + (if (missed <= STEADY_MAX_MISSED) "steady" else "gaps") to NowTone.Neutral
+            NowDisplayState.FirstSync ->
+                (if (connecting && dataSets == 0) "connecting" else "syncing $dataSets/2") to NowTone.Charge
+            NowDisplayState.Resyncing -> "resync $dataSets/2" to NowTone.Charge
+            NowDisplayState.Stale -> "stalled ${formatAge(frameAgeMs ?: 0L)}" to NowTone.Discharge
+            NowDisplayState.Reconnecting -> "dropped" to NowTone.Discharge
+            NowDisplayState.OutOfRange -> "out of range" to NowTone.Neutral
+            NowDisplayState.CollectionError -> "error" to NowTone.Error
+            NowDisplayState.CollectionOff -> "off" to NowTone.Neutral
+            NowDisplayState.NoMeter -> "no meter" to NowTone.Neutral
         }
-        return when (mode) {
-            NowLinkMode.Live -> NowDataLink(
-                expanded = false,
-                mode = mode,
-                ticks = ticks,
-                stat = "$received/$LINK_SECONDS $DOT " + if (missed <= STEADY_MAX_MISSED) "steady" else "gaps",
-                caption = null,
-                captionTone = NowTone.Neutral,
-            )
-            NowLinkMode.Stale -> NowDataLink(
-                expanded = true,
-                mode = mode,
-                ticks = ticks,
-                stat = "$received/$LINK_SECONDS frames",
-                caption = "Frames stopped ${(frameAgeMs ?: 0L) / 1_000L}s ago $DOT values may be outdated",
-                captionTone = NowTone.Discharge,
-            )
-            NowLinkMode.Sync -> NowDataLink(
-                expanded = true,
-                mode = mode,
-                ticks = ticks,
-                stat = "$framesInWindow frames",
-                caption = if (displayState == NowDisplayState.FirstSync) {
-                    "First connection $DOT $syncDetail"
-                } else {
-                    "Reconnected $DOT refreshing values ($syncDetail)"
-                },
-                captionTone = NowTone.Charge,
-            )
-            NowLinkMode.Offline -> NowDataLink(
-                expanded = false,
-                mode = mode,
-                ticks = ticks,
-                stat = "no link",
-                caption = null,
-                captionTone = NowTone.Neutral,
-            )
+        return NowDataLink(mode = mode, ticks = ticks, stat = stat, statTone = tone)
+    }
+
+    /** "15s", "4m", "2h": one unit so the Data link label stays short. */
+    fun formatAge(ageMs: Long): String {
+        val seconds = ageMs / 1_000L
+        return when {
+            seconds < 60L -> "${seconds}s"
+            seconds < 3_600L -> "${seconds / 60L}m"
+            else -> "${seconds / 3_600L}h"
         }
     }
 

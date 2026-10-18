@@ -36,7 +36,7 @@ class NowScreenReducerTest {
         assertEquals("+164.7", model.flow.power)
         assertEquals("+12.40", model.flow.current)
         assertEquals(NowTone.Charge, model.barTone)
-        assertFalse(model.dataLink.expanded)
+        assertEquals(NowTone.Neutral, model.dataLink.statTone)
     }
 
     @Test
@@ -79,7 +79,7 @@ class NowScreenReducerTest {
     }
 
     @Test
-    fun staleKeepsValuesExpandsLinkAndHasNoBanner() {
+    fun staleKeepsValuesLabelsLinkAndHasNoBanner() {
         val model = reduce(state(frameAgeMs = 15_000L))
 
         assertEquals(NowDisplayState.Stale, model.displayState)
@@ -88,10 +88,9 @@ class NowScreenReducerTest {
         assertNull(model.banner)
         assertEquals("82", model.soc)
         assertEquals(NowCellAnimation.None, model.flow.animation)
-        assertTrue(model.dataLink.expanded)
         assertEquals(NowLinkMode.Stale, model.dataLink.mode)
-        assertEquals("Frames stopped 15s ago \u00b7 values may be outdated", model.dataLink.caption)
-        assertEquals(NowTone.Discharge, model.dataLink.captionTone)
+        assertEquals("stalled 15s", model.dataLink.stat)
+        assertEquals(NowTone.Discharge, model.dataLink.statTone)
     }
 
     @Test
@@ -141,9 +140,8 @@ class NowScreenReducerTest {
         assertEquals("Waiting for readings", model.flow.label)
         assertEquals(NowTone.Muted, model.flow.tone)
         assertNull(model.chart)
-        assertTrue(model.dataLink.expanded)
-        assertEquals("1 frames", model.dataLink.stat)
-        assertEquals("First connection \u00b7 receiving 1 of 2 data sets", model.dataLink.caption)
+        assertEquals("syncing 1/2", model.dataLink.stat)
+        assertEquals(NowTone.Charge, model.dataLink.statTone)
         assertEquals("--", model.totalsIn)
     }
 
@@ -152,7 +150,7 @@ class NowScreenReducerTest {
         val model = reduce(state(phase = CollectionPhase.CONNECTING, hasValues = false, frameTimes = emptyList()))
 
         assertEquals(NowDisplayState.FirstSync, model.displayState)
-        assertEquals("First connection \u00b7 connecting to the meter", model.dataLink.caption)
+        assertEquals("connecting", model.dataLink.stat)
     }
 
     @Test
@@ -164,7 +162,7 @@ class NowScreenReducerTest {
         assertEquals("82", model.soc)
         assertEquals("Refreshing estimate\u2026", model.flow.eta)
         assertEquals(NowCellAnimation.None, model.flow.animation)
-        assertEquals("Reconnected \u00b7 refreshing values (receiving 1 of 2 data sets)", model.dataLink.caption)
+        assertEquals("resync 1/2", model.dataLink.stat)
     }
 
     @Test
@@ -195,13 +193,12 @@ class NowScreenReducerTest {
         assertEquals(NowPillIcon.Retry, model.pill.icon)
         assertEquals("Reconnecting in 15 seconds, retry now", model.pill.contentDescription)
         assertNull(model.banner)
-        assertEquals("Link dropped at 14:31 \u00b7 attempt 4", model.dataLink.statusNote)
         assertEquals("Charging", model.flow.label)
         assertEquals("Last reading 14:31", model.flow.eta)
         assertEquals(NowCellAnimation.None, model.flow.animation)
         assertEquals("82", model.soc)
-        assertEquals("no link", model.dataLink.stat)
-        assertFalse(model.dataLink.expanded)
+        assertEquals("dropped", model.dataLink.stat)
+        assertEquals(NowTone.Discharge, model.dataLink.statTone)
     }
 
     @Test
@@ -225,12 +222,12 @@ class NowScreenReducerTest {
         assertEquals(NowTone.Neutral, model.pill.tone)
         assertNull(model.pill.action)
         assertNull(model.banner)
-        assertEquals("Reconnects by itself when it is back \u00b7 last 14:31", model.dataLink.statusNote)
-        assertEquals(NowTone.Neutral, model.dataLink.statusNoteTone)
+        assertEquals("out of range", model.dataLink.stat)
+        assertEquals(NowTone.Neutral, model.dataLink.statTone)
     }
 
     @Test
-    fun errorWithoutScheduledRetryIsCollectionErrorWithReason() {
+    fun errorWithoutScheduledRetryIsCollectionError() {
         val model = reduce(state(phase = CollectionPhase.ERROR, error = "Could not turn on meter notifications"))
 
         assertEquals(NowDisplayState.CollectionError, model.displayState)
@@ -239,8 +236,8 @@ class NowScreenReducerTest {
         assertEquals(NowBannerAction.Retry, model.pill.action)
         assertEquals(NowPillIcon.Retry, model.pill.icon)
         assertNull(model.banner)
-        assertEquals("Could not turn on meter notifications", model.dataLink.statusNote)
-        assertEquals(NowTone.Error, model.dataLink.statusNoteTone)
+        assertEquals("error", model.dataLink.stat)
+        assertEquals(NowTone.Error, model.dataLink.statTone)
     }
 
     @Test
@@ -253,7 +250,7 @@ class NowScreenReducerTest {
         assertEquals(NowBannerAction.Start, model.pill.action)
         assertEquals(NowPillIcon.Play, model.pill.icon)
         assertNull(model.banner)
-        assertEquals("Stopped from the notification \u00b7 last 14:31", model.dataLink.statusNote)
+        assertEquals("off", model.dataLink.stat)
         assertEquals("82", model.soc)
         assertEquals("Last reading 14:31", model.flow.eta)
     }
@@ -385,6 +382,14 @@ class NowScreenReducerTest {
 
         val gappy = (0 until 60).filter { it % 10 != 3 }.map { now - it * 1_000L }
         assertEquals("54/60 \u00b7 gaps", reduce(state(frameTimes = gappy, frameAgeMs = 0L)).dataLink.stat)
+    }
+
+    @Test
+    fun staleAgeLabelUsesOneUnit() {
+        assertEquals("59s", NowScreenReducer.formatAge(59_999L))
+        assertEquals("1m", NowScreenReducer.formatAge(60_000L))
+        assertEquals("59m", NowScreenReducer.formatAge(3_599_000L))
+        assertEquals("2h", NowScreenReducer.formatAge(7_200_000L))
     }
 
     @Test
