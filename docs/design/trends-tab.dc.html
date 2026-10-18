@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Trends tab</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#4FB8FF}a:hover{color:#8FD2FF}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(61,220,151,.55)}70%{box-shadow:0 0 0 8px rgba(61,220,151,0)}100%{box-shadow:0 0 0 0 rgba(61,220,151,0)}}
+.pulse{animation:pulse 2s infinite}
+@media (prefers-reduced-motion: reduce){.pulse{animation:none}}
+</style>
+</helmet>
+<div style="width: 390px; height: 1320px; box-sizing: border-box; display: flex; flex-direction: column; background: #0D0F12; color: #F2F4F7; font-family: 'IBM Plex Sans', system-ui, sans-serif; overflow: hidden">
+
+<main style="flex-grow: 1; box-sizing: border-box; padding: 20px 20px 16px; display: flex; flex-direction: column; gap: 16px">
+
+<header style="display: flex; align-items: center; justify-content: space-between; height: 36px">
+<h1 style="margin: 0; font-size: 22px; line-height: 28px; font-weight: 600">Trends</h1>
+<sc-if value="{{isLive}}" hint-placeholder-val="{{ false }}">
+<span style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: #3DDC97"><span class="pulse" aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: #3DDC97"></span>Live</span>
+</sc-if>
+</header>
+
+<div role="tablist" aria-label="Time range" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 4px; border-radius: 14px; background: #16191E">
+<sc-for list="{{ranges}}" as="r" hint-placeholder-count="4">
+<button role="tab" aria-selected="{{r.sel}}" onClick="{{r.pick}}" style="all: unset; cursor: pointer; height: 40px; border-radius: 10px; background: {{r.bg}}; color: {{r.fg}}; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 600">{{r.label}}</button>
+</sc-for>
+</div>
+
+<section aria-label="Chart" style="padding: 14px 16px 12px; border-radius: 16px; background: #16191E; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; gap: 6px; flex-wrap: wrap">
+<sc-for list="{{metrics}}" as="m" hint-placeholder-count="4">
+<button aria-pressed="{{m.sel}}" onClick="{{m.pick}}" style="all: unset; cursor: pointer; height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid {{m.border}}; background: {{m.bg}}; color: {{m.fg}}; display: flex; align-items: center; font-size: 13px; font-weight: 500">{{m.label}}</button>
+</sc-for>
+</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between">
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 28px; line-height: 34px; font-weight: 500">{{c.now}}<span style="font-size: 14px; color: #9AA3AE"> {{c.unit}}</span></span>
+<span style="font-size: 13px; color: #9AA3AE">{{c.nowLabel}}</span>
+</div>
+<div style="position: relative">
+<svg width="318" height="190" viewBox="0 0 318 190" role="img" aria-label="Trend chart for the selected metric and range">
+<defs>
+<clipPath id="gAbove"><rect x="0" y="0" width="318" height="{{c.zeroY}}"></rect></clipPath>
+<clipPath id="gBelow"><rect x="0" y="{{c.zeroY}}" width="318" height="190"></rect></clipPath>
+</defs>
+<line x1="0" y1="20" x2="318" y2="20" stroke="#1E2228" stroke-width="1"></line>
+<line x1="0" y1="95" x2="318" y2="95" stroke="#1E2228" stroke-width="1"></line>
+<line x1="0" y1="170" x2="318" y2="170" stroke="#1E2228" stroke-width="1"></line>
+<path d="{{c.area}}" fill="{{c.upFill}}" clip-path="url(#gAbove)"></path>
+<path d="{{c.area}}" fill="{{c.downFill}}" clip-path="url(#gBelow)"></path>
+<line x1="0" y1="{{c.zeroY}}" x2="318" y2="{{c.zeroY}}" stroke="#2C323A" stroke-width="1" stroke-dasharray="3 4"></line>
+<path d="{{c.line}}" fill="none" stroke="{{c.upColor}}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#gAbove)"></path>
+<path d="{{c.line}}" fill="none" stroke="{{c.downColor}}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#gBelow)"></path>
+<line x1="{{c.scrubX}}" y1="10" x2="{{c.scrubX}}" y2="175" stroke="#9AA3AE" stroke-width="1"></line>
+<circle cx="{{c.scrubX}}" cy="{{c.scrubY}}" r="4.5" fill="#F2F4F7" stroke="#16191E" stroke-width="2"></circle>
+</svg>
+<div style="position: absolute; left: {{c.tipX}}; top: 0; padding: 4px 8px; border-radius: 8px; background: #2C323A; font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 16px; white-space: nowrap">{{c.tip}}</div>
+</div>
+<div style="display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #7D8692">
+<sc-for list="{{c.ticks}}" as="t" hint-placeholder-count="4">
+<span>{{t}}</span>
+</sc-for>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding-top: 10px; border-top: 1px solid #1E2228">
+<div style="display: flex; flex-direction: column">
+<span style="font-size: 12px; color: #9AA3AE">Min</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 15px; font-weight: 500">{{c.min}}</span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center">
+<span style="font-size: 12px; color: #9AA3AE">Average</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 15px; font-weight: 500">{{c.avg}}</span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: flex-end">
+<span style="font-size: 12px; color: #9AA3AE">Max</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 15px; font-weight: 500">{{c.max}}</span>
+</div>
+</div>
+</section>
+
+<section aria-label="Energy" style="padding: 14px 16px; border-radius: 16px; background: #16191E; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; justify-content: space-between; font-size: 13px; line-height: 18px; color: #9AA3AE">
+<span>Energy · {{e.title}}</span>
+<span>net <span style="font-family: 'IBM Plex Mono', monospace; color: #F2F4F7">{{e.net}}</span> kWh</span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+<div style="padding: 10px 12px; border-radius: 12px; background: rgba(79,184,255,.08); display: flex; flex-direction: column">
+<span style="font-size: 12px; color: #4FB8FF">In · charged</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 20px; font-weight: 500">{{e.in}}<span style="font-size: 13px; color: #9AA3AE"> kWh</span></span>
+</div>
+<div style="padding: 10px 12px; border-radius: 12px; background: rgba(255,178,63,.08); display: flex; flex-direction: column">
+<span style="font-size: 12px; color: #FFB23F">Out · used</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 20px; font-weight: 500">{{e.out}}<span style="font-size: 13px; color: #9AA3AE"> kWh</span></span>
+</div>
+</div>
+<div role="img" aria-label="Energy in above the line, energy out below, per period" style="display: flex; gap: {{e.gap}}; height: 120px">
+<sc-for list="{{e.bars}}" as="b" hint-placeholder-count="7">
+<div style="flex-grow: 1; flex-basis: 0; display: flex; flex-direction: column">
+<div style="height: 60px; display: flex; align-items: flex-end"><span style="width: 100%; height: {{b.up}}; border-radius: 3px 3px 0 0; background: #4FB8FF"></span></div>
+<div style="height: 60px; display: flex; align-items: flex-start; border-top: 1px solid #2C323A"><span style="width: 100%; height: {{b.down}}; border-radius: 0 0 3px 3px; background: #FFB23F"></span></div>
+</div>
+</sc-for>
+</div>
+<div style="display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #7D8692">
+<span>{{e.from}}</span><span>{{e.to}}</span>
+</div>
+</section>
+
+<section aria-label="Saved history" style="border-radius: 16px; background: #16191E; display: flex; flex-direction: column">
+<div style="padding: 14px 16px; display: flex; flex-direction: column; gap: 4px">
+<span style="font-size: 16px; line-height: 22px; font-weight: 600">Saved history</span>
+<span style="font-size: 13px; line-height: 18px; color: #9AA3AE"><span style="font-family: 'IBM Plex Mono', monospace; color: #F2F4F7">128,430</span> readings since 2 Sep · kept until you clear them</span>
+</div>
+<div style="padding: 0 16px 14px; display: flex; flex-direction: column; gap: 8px">
+<button style="all: unset; cursor: pointer; box-sizing: border-box; height: 44px; border-radius: 12px; background: #F2F4F7; color: #0D0F12; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 15px; font-weight: 600">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"></path><path d="M7 10l5 5 5-5"></path><path d="M4 21h16"></path></svg>
+Export CSV
+</button>
+<span style="font-size: 12px; line-height: 16px; color: #7D8692">Last export today 14:10 · battery-history.csv · <a href="#">Copy ADB command</a></span>
+</div>
+<button style="all: unset; cursor: pointer; height: 48px; border-top: 1px solid #1E2228; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 500; color: #FF8A8A">Clear saved history…</button>
+</section>
+
+</main>
+
+<nav aria-label="Main" style="flex-shrink: 0; height: 72px; box-sizing: border-box; padding: 8px 24px 12px; border-top: 1px solid #1E2228; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+<button style="all: unset; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: #7D8692; font-size: 12px; font-weight: 500">
+<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="16" height="10" rx="2"></rect><path d="M21 11v2"></path><path d="M7 10v4"></path><path d="M11 10v4"></path></svg>
+<span>Now</span>
+</button>
+<button aria-current="page" style="all: unset; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: #F2F4F7; font-size: 12px; font-weight: 600">
+<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l5-5 4 4 8-8"></path><path d="M3 21h18"></path></svg>
+<span>Trends</span>
+</button>
+<button style="all: unset; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: #7D8692; font-size: 12px; font-weight: 500">
+<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7l10 10-5 5V2l5 5L7 17"></path></svg>
+<span>Device</span>
+</button>
+</nav>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"range":{"editor":"enum","options":["Live","24 h","7 d","30 d"],"default":"24 h"},"metric":{"editor":"enum","options":["Power","SoC","Voltage","Current"],"default":"Power"},"$preview":{"width":390,"height":1320}}'>
+class Component extends DCLogic {
+renderVals() {
+const range = (this.state && this.state.range) || this.props.range || '24 h';
+const metric = (this.state && this.state.metric) || this.props.metric || 'Power';
+const N = 60;
+const seed = { 'Live': 1.3, '24 h': 2.1, '7 d': 3.7, '30 d': 5.2 }[range] || 2.1;
+const raw = [];
+for (let i = 0; i < N; i++) {
+const t = i / (N - 1);
+let v;
+if (metric === 'Power') v = 110 * Math.sin(t * Math.PI * (range === 'Live' ? 1.2 : 2.4) + seed) + 50 + 35 * Math.sin(t * 23 + seed);
+else if (metric === 'SoC') v = 62 + 22 * Math.sin(t * Math.PI * (range === '30 d' ? 6 : 2) + seed) + 3 * Math.sin(t * 17);
+else if (metric === 'Voltage') v = 13.1 + 0.25 * Math.sin(t * Math.PI * 2 + seed) + 0.04 * Math.sin(t * 29);
+else v = 8.5 * Math.sin(t * Math.PI * 2.4 + seed) + 3.5 + 2.5 * Math.sin(t * 23 + seed);
+raw.push(v);
+}
+const sym = metric === 'Power' || metric === 'Current';
+let lo = Math.min.apply(null, raw), hi = Math.max.apply(null, raw);
+if (sym) { const m = Math.max(Math.abs(lo), Math.abs(hi)); lo = -m; hi = m; }
+else { const pad = (hi - lo) * 0.15; lo -= pad; hi += pad; }
+const y = function (v) { return 170 - (v - lo) / (hi - lo) * 150; };
+const x = function (i) { return (i / (N - 1)) * 318; };
+let line = '';
+for (let i = 0; i < N; i++) line += (i ? ' L' : 'M') + x(i).toFixed(1) + ' ' + y(raw[i]).toFixed(1);
+const zeroY = sym ? y(0) : 190;
+const area = line + ' L318 ' + zeroY.toFixed(1) + ' L0 ' + zeroY.toFixed(1) + ' Z';
+const units = { Power: 'W', SoC: '%', Voltage: 'V', Current: 'A' };
+const dec = { Power: 0, SoC: 0, Voltage: 2, Current: 1 };
+const fmt = function (v) { const s = v.toFixed(dec[metric]); return (sym && v > 0 ? '+' : '') + s.replace('-', '−') + ' ' + units[metric]; };
+const avg = raw.reduce(function (a, b) { return a + b; }, 0) / N;
+const si = Math.round(N * 0.62);
+const tickSets = { 'Live': ['−15 min', '−10', '−5', 'now'], '24 h': ['15:00', '21:00', '03:00', '09:00', 'now'], '7 d': ['Mon', 'Wed', 'Fri', 'Sun'], '30 d': ['18 Sep', '28 Sep', '8 Oct', '18 Oct'] };
+const scrubLabel = { 'Live': '14:28', '24 h': 'Sat 02:10', '7 d': 'Thu 18:00', '30 d': '6 Oct' }[range];
+const neutral = !sym;
+const c = {
+now: fmt(raw[N - 1]).replace(' ' + units[metric], ''), unit: units[metric], nowLabel: range === 'Live' ? 'now' : 'latest',
+line: line, area: area, zeroY: zeroY.toFixed(1),
+upColor: neutral ? '#4FB8FF' : '#4FB8FF', downColor: neutral ? '#4FB8FF' : '#FFB23F',
+upFill: neutral ? 'rgba(79,184,255,.10)' : 'rgba(79,184,255,.16)', downFill: neutral ? 'rgba(79,184,255,.10)' : 'rgba(255,178,63,.16)',
+scrubX: x(si).toFixed(1), scrubY: y(raw[si]).toFixed(1), tipX: Math.min(220, Math.max(0, x(si) - 50)).toFixed(0) + 'px',
+tip: scrubLabel + ' · ' + fmt(raw[si]),
+ticks: tickSets[range] || tickSets['24 h'],
+min: fmt(Math.min.apply(null, raw)), avg: fmt(avg), max: fmt(Math.max.apply(null, raw))
+};
+const nb = { 'Live': 24, '24 h': 24, '7 d': 7, '30 d': 30 }[range] || 24;
+const bars = [];
+let tin = 0, tout = 0;
+for (let i = 0; i < nb; i++) {
+const a = Math.max(0.05, 0.55 + 0.4 * Math.sin(i * 0.9 + seed));
+const b = Math.max(0.05, 0.5 + 0.35 * Math.sin(i * 0.7 + seed + 1.5));
+tin += a; tout += b;
+bars.push({ up: Math.round(a * 58) + 'px', down: Math.round(b * 58) + 'px' });
+}
+const scale = { 'Live': 0.18, '24 h': 0.18, '7 d': 1.9, '30 d': 1.7 }[range] || 0.18;
+const ein = tin * scale, eout = tout * scale;
+const e = {
+title: { 'Live': 'today by hour', '24 h': 'last 24 h by hour', '7 d': 'last 7 days', '30 d': 'last 30 days' }[range],
+in: ein.toFixed(2), out: eout.toFixed(2), net: ((ein - eout) >= 0 ? '+' : '−') + Math.abs(ein - eout).toFixed(2),
+bars: bars, gap: nb > 20 ? '2px' : '6px',
+from: { 'Live': '00:00', '24 h': '15:00', '7 d': 'Mon', '30 d': '18 Sep' }[range], to: 'now'
+};
+const self = this;
+const ranges = ['Live', '24 h', '7 d', '30 d'].map(function (r) {
+return { label: r, sel: r === range, bg: r === range ? '#2C323A' : 'transparent', fg: r === range ? '#F2F4F7' : '#9AA3AE', pick: function () { self.setState({ range: r }); } };
+});
+const metrics = ['Power', 'SoC', 'Voltage', 'Current'].map(function (m) {
+const s = m === metric;
+return { label: m, sel: s, bg: s ? 'rgba(79,184,255,.14)' : 'transparent', border: s ? 'rgba(79,184,255,.5)' : '#2C323A', fg: s ? '#4FB8FF' : '#C9D0D8', pick: function () { self.setState({ metric: m }); } };
+});
+return { isLive: range === 'Live', ranges: ranges, metrics: metrics, c: c, e: e };
+}
+}
+</script>
+</body>
+</html>

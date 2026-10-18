@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>First run setup</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#4FB8FF}a:hover{color:#8FD2FF}
+@keyframes ring{0%{transform:scale(.6);opacity:.7}100%{transform:scale(1.6);opacity:0}}
+.ring{animation:ring 2s ease-out infinite}
+@media (prefers-reduced-motion: reduce){.ring{animation:none}}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; display: flex; flex-direction: column; background: #0D0F12; color: #F2F4F7; font-family: 'IBM Plex Sans', system-ui, sans-serif; overflow: hidden">
+
+<main style="flex-grow: 1; box-sizing: border-box; padding: 20px 24px 24px; display: flex; flex-direction: column; gap: 24px">
+
+<header style="display: flex; align-items: center; justify-content: space-between; height: 36px">
+<span style="font-size: 17px; line-height: 24px; font-weight: 600">Set up collection</span>
+<sc-if value="{{v.showSteps}}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; align-items: center; gap: 10px">
+<span style="font-size: 13px; color: #9AA3AE">{{v.stepLabel}}</span>
+<div aria-hidden="true" style="display: flex; gap: 4px">
+<sc-for list="{{dots}}" as="d" hint-placeholder-count="4">
+<span style="width: 18px; height: 4px; border-radius: 2px; background: {{d.c}}"></span>
+</sc-for>
+</div>
+</div>
+</sc-if>
+</header>
+
+<sc-if value="{{isBlocked}}" hint-placeholder-val="{{ true }}">
+<section style="flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; text-align: center">
+<span aria-hidden="true" style="width: 88px; height: 88px; border-radius: 28px; background: {{v.iconBg}}; color: {{v.iconFg}}; display: flex; align-items: center; justify-content: center">
+<sc-if value="{{v.iconBt}}" hint-placeholder-val="{{ true }}">
+<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10-5 5V2l5 5L7 17"></path></svg>
+</sc-if>
+<sc-if value="{{v.iconLink}}" hint-placeholder-val="{{ false }}">
+<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="9" height="10" rx="2"></rect><rect x="13" y="4" width="9" height="16" rx="2"></rect><path d="M11 12h2"></path></svg>
+</sc-if>
+<sc-if value="{{v.iconBell}}" hint-placeholder-val="{{ false }}">
+<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10 21h4"></path></svg>
+</sc-if>
+<sc-if value="{{v.iconCheck}}" hint-placeholder-val="{{ false }}">
+<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"></path></svg>
+</sc-if>
+</span>
+<h1 style="margin: 0; font-size: 24px; line-height: 32px; font-weight: 600">{{v.title}}</h1>
+<p style="margin: 0; max-width: 310px; font-size: 15px; line-height: 22px; color: #9AA3AE">{{v.body}}</p>
+<sc-if value="{{v.showPreview}}" hint-placeholder-val="{{ false }}">
+<div style="width: 100%; box-sizing: border-box; margin-top: 8px; padding: 12px 14px; border-radius: 16px; background: #16191E; display: flex; align-items: center; gap: 12px; text-align: left">
+<span aria-hidden="true" style="width: 32px; height: 32px; border-radius: 10px; background: rgba(79,184,255,.14); color: #4FB8FF; display: flex; align-items: center; justify-content: center">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10-5 5V2l5 5L7 17"></path></svg>
+</span>
+<div style="flex-grow: 1; display: flex; flex-direction: column">
+<span style="font-size: 13px; line-height: 18px; font-weight: 600">Battery 82% · charging +165 W</span>
+<span style="font-size: 12px; line-height: 16px; color: #9AA3AE">Collecting in background</span>
+</div>
+<span style="font-size: 12px; font-weight: 600; color: #4FB8FF">Stop</span>
+</div>
+<span style="font-size: 12px; color: #7D8692">Example of the ongoing notification</span>
+</sc-if>
+</section>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<button style="all: unset; cursor: pointer; box-sizing: border-box; height: 52px; border-radius: 14px; background: #F2F4F7; color: #0D0F12; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 600">{{v.cta}}</button>
+<button style="all: unset; cursor: pointer; box-sizing: border-box; height: 44px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 500; color: #9AA3AE">{{v.secondary}}</button>
+</div>
+</sc-if>
+
+<sc-if value="{{isScanning}}" hint-placeholder-val="{{ false }}">
+<section style="display: flex; flex-direction: column; align-items: center; gap: 14px; padding-top: 24px; text-align: center">
+<div aria-hidden="true" style="position: relative; width: 120px; height: 120px; display: flex; align-items: center; justify-content: center">
+<span class="ring" style="position: absolute; width: 120px; height: 120px; border-radius: 50%; border: 2px solid #4FB8FF"></span>
+<span class="ring" style="position: absolute; width: 120px; height: 120px; border-radius: 50%; border: 2px solid #4FB8FF; animation-delay: 1s"></span>
+<span style="width: 64px; height: 64px; border-radius: 22px; background: rgba(79,184,255,.14); color: #4FB8FF; display: flex; align-items: center; justify-content: center">
+<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10-5 5V2l5 5L7 17"></path></svg>
+</span>
+</div>
+<h1 style="margin: 0; font-size: 24px; line-height: 32px; font-weight: 600">Looking for your meter</h1>
+<p style="margin: 0; max-width: 300px; font-size: 15px; line-height: 22px; color: #9AA3AE">Keep the phone close to the battery meter and make sure it is powered on.</p>
+</section>
+<section aria-label="Nearby devices" style="display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 13px; line-height: 18px; color: #9AA3AE">Nearby · 2 found</span>
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 12px 12px 16px; border-radius: 16px; background: #16191E; border: 1px solid rgba(79,184,255,.3)">
+<div style="display: flex; flex-direction: column">
+<span style="font-size: 16px; line-height: 22px; font-weight: 600">KMF Meter</span>
+<span style="font-size: 13px; line-height: 18px; color: #3DDC97">Strong signal · likely your meter</span>
+</div>
+<button style="all: unset; cursor: pointer; box-sizing: border-box; height: 44px; padding: 0 18px; border-radius: 12px; background: #4FB8FF; color: #0D0F12; display: flex; align-items: center; font-size: 15px; font-weight: 600">Select</button>
+</div>
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 12px 12px 16px; border-radius: 16px; background: #16191E">
+<div style="display: flex; flex-direction: column">
+<span style="font-size: 16px; line-height: 22px; font-weight: 500; color: #C9D0D8">Unnamed device</span>
+<span style="font-size: 13px; line-height: 18px; color: #9AA3AE">Weak signal</span>
+</div>
+<button style="all: unset; cursor: pointer; box-sizing: border-box; height: 44px; padding: 0 18px; border-radius: 12px; border: 1px solid #2C323A; display: flex; align-items: center; font-size: 15px; font-weight: 500">Select</button>
+</div>
+</section>
+</sc-if>
+
+</main>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"step":{"editor":"enum","options":["Bluetooth off","Permission needed","Scanning","Approve meter","Notifications","All set"],"default":"Permission needed"},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() {
+const step = this.props.step ?? 'Permission needed';
+const blue = { iconBg: 'rgba(79,184,255,.14)', iconFg: '#4FB8FF' };
+const icons = { iconBt: false, iconLink: false, iconBell: false, iconCheck: false, showPreview: false, showSteps: true };
+const views = {
+'Bluetooth off': Object.assign({}, icons, { iconBt: true, showSteps: false, iconBg: 'rgba(255,178,63,.14)', iconFg: '#FFB23F', title: 'Bluetooth is off', body: 'The app reads your battery meter over Bluetooth. Turn it on to continue.', cta: 'Turn on Bluetooth', secondary: 'Not now' }),
+'Permission needed': Object.assign({}, icons, blue, { iconBt: true, n: 1, title: 'Allow nearby devices', body: 'Android needs your permission before the app can find and connect to your meter. Nothing leaves your phone.', cta: 'Allow access', secondary: 'Why is this needed?' }),
+'Scanning': Object.assign({}, icons, { n: 2 }),
+'Approve meter': Object.assign({}, icons, blue, { iconLink: true, n: 3, title: 'Pair your meter with Android', body: 'Android will ask you to confirm this meter. After that it wakes the app whenever the meter is nearby, so readings keep coming in even when the app is closed.', cta: 'Continue', secondary: 'Choose another meter' }),
+'Notifications': Object.assign({}, icons, blue, { iconBell: true, showPreview: true, n: 4, title: 'Allow notifications', body: 'Background collection always shows a notification with a Stop button, so you stay in control.', cta: 'Allow notifications', secondary: 'Why is this needed?' }),
+'All set': Object.assign({}, icons, { iconCheck: true, showSteps: false, iconBg: 'rgba(61,220,151,.14)', iconFg: '#3DDC97', title: 'Collection is on', body: 'The app now collects battery readings in the background whenever your meter is in range. Stop it any time from the notification or the Device tab.', cta: 'Open dashboard', secondary: '' })
+};
+const v = views[step] || views['Permission needed'];
+v.stepLabel = 'Step ' + (v.n || 1) + ' of 4';
+const dots = [];
+for (let i = 1; i <= 4; i++) dots.push({ c: i <= (v.n || 0) ? '#4FB8FF' : '#2C323A' });
+return {
+isBlocked: step !== 'Scanning',
+isScanning: step === 'Scanning',
+v: v,
+dots: dots
+};
+}
+}
+</script>
+</body>
+</html>
