@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Mirrors KmfPalette.Background so the window matches Compose before first frame. -->
+    <color name="kmf_background">#FF0D0F12</color>
+</resources>
