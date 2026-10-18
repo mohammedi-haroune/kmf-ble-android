@@ -70,6 +70,17 @@ class KmfHistoryRepository(
                 sessionState.update(frame)
             }
 
+            // Each connection starts from an all-zero reading, so a sample is only trustworthy once
+            // A (live values), B (richer state) and C (energy totals) were all seen this session.
+            if (!sessionState.isComplete) {
+                AppLog.d(
+                    "battery sample skipped until session is complete: " +
+                        "A=${sessionState.hasAFrame} B=${sessionState.hasBFrame} C=${sessionState.hasCFrame}",
+                    TAG,
+                )
+                return
+            }
+
             batterySampleDao.insert(
                 KmfBatterySampleEntity(
                     timestampMs = observation.timestampMs,
@@ -127,6 +138,9 @@ class KmfHistoryRepository(
         var rawBFieldsCsv: String? = null,
         var rawCFieldsCsv: String? = null,
     ) {
+        val isComplete: Boolean
+            get() = hasAFrame && hasBFrame && hasCFrame
+
         fun update(frame: KmfFrame) {
             when (frame) {
                 is KmfFrame.A -> {

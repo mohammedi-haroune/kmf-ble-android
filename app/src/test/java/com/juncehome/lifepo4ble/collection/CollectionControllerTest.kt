@@ -35,13 +35,16 @@ class CollectionControllerTest {
         try {
             fixture.controller.start(configuration)
             fixture.emitReadyAAndBFrames()
+            runCurrent()
+            assertEquals(1, fixture.repository.countWrites(":C\n"))
+            fixture.emitTotalsFrame()
             fixture.controller.setVisibility(CollectionVisibility.BACKGROUND)
 
             advanceTimeBy(299_999)
-            assertEquals(0, fixture.repository.countWrites(":C\n"))
+            assertEquals(1, fixture.repository.countWrites(":C\n"))
             advanceTimeBy(1)
             runCurrent()
-            assertEquals(1, fixture.repository.countWrites(":C\n"))
+            assertEquals(2, fixture.repository.countWrites(":C\n"))
         } finally {
             fixture.close()
         }
@@ -91,12 +94,16 @@ class CollectionControllerTest {
         try {
             fixture.controller.start(configuration)
             fixture.emitReadyAAndBFrames()
-
-            advanceTimeBy(299_999)
-            assertEquals(0, fixture.repository.countWrites(":C\n"))
-            advanceTimeBy(1)
             runCurrent()
             assertEquals(1, fixture.repository.countWrites(":C\n"))
+            fixture.emitTotalsFrame()
+
+            // The pending 2 s totals retry finishes first, then the regular cadence starts.
+            advanceTimeBy(2_000 + 299_999)
+            assertEquals(1, fixture.repository.countWrites(":C\n"))
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(2, fixture.repository.countWrites(":C\n"))
         } finally {
             fixture.close()
         }
@@ -109,12 +116,60 @@ class CollectionControllerTest {
             fixture.controller.start(configuration)
             fixture.controller.setVisibility(CollectionVisibility.FOREGROUND)
             fixture.emitReadyAAndBFrames()
-
-            advanceTimeBy(29_999)
-            assertEquals(0, fixture.repository.countWrites(":C\n"))
-            advanceTimeBy(1)
             runCurrent()
             assertEquals(1, fixture.repository.countWrites(":C\n"))
+            fixture.emitTotalsFrame()
+
+            advanceTimeBy(2_000 + 29_999)
+            assertEquals(1, fixture.repository.countWrites(":C\n"))
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(2, fixture.repository.countWrites(":C\n"))
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test
+    fun totalsPollRetriesEveryTwoSecondsUntilCFrameArrives() = runTest {
+        val fixture = fixture(testScheduler)
+        try {
+            fixture.controller.start(configuration)
+            fixture.emitReadyAAndBFrames()
+            runCurrent()
+            assertEquals(1, fixture.repository.countWrites(":C\n"))
+
+            advanceTimeBy(2_000)
+            runCurrent()
+            assertEquals(2, fixture.repository.countWrites(":C\n"))
+            advanceTimeBy(2_000)
+            runCurrent()
+            assertEquals(3, fixture.repository.countWrites(":C\n"))
+
+            fixture.emitTotalsFrame()
+            advanceTimeBy(10_000)
+            runCurrent()
+            assertEquals(3, fixture.repository.countWrites(":C\n"))
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test
+    fun reconnectAsksForTotalsAgainRightAway() = runTest {
+        val fixture = fixture(testScheduler)
+        try {
+            fixture.controller.start(configuration)
+            fixture.emitReadyAAndBFrames()
+            fixture.emitTotalsFrame()
+            runCurrent()
+            val beforeReconnect = fixture.repository.countWrites(":C\n")
+
+            fixture.repository.emit(BleEvent.Disconnected("link lost"))
+            fixture.emitReadyAAndBFrames()
+            runCurrent()
+
+            assertEquals(beforeReconnect + 1, fixture.repository.countWrites(":C\n"))
         } finally {
             fixture.close()
         }
@@ -360,6 +415,10 @@ class CollectionControllerTest {
             repository.emit(BleEvent.ServicesDiscovered(profile))
             repository.emit(BleEvent.NotificationReceived(profile.notifyUuid, ":A=1326,1080,1,5793,57930,1000\n".encodeToByteArray()))
             repository.emit(BleEvent.NotificationReceived(profile.notifyUuid, ":B=1\n".encodeToByteArray()))
+        }
+
+        suspend fun emitTotalsFrame() {
+            repository.emit(BleEvent.NotificationReceived(profile.notifyUuid, ":C=1820,486,0,0,0,0\n".encodeToByteArray()))
         }
 
         fun close() {

@@ -2,10 +2,13 @@ package com.juncehome.lifepo4ble.ui
 
 import com.juncehome.lifepo4ble.ble.BleEvent
 import com.juncehome.lifepo4ble.ble.GattProfile
+import com.juncehome.lifepo4ble.ble.ScannedDevice
 import com.juncehome.lifepo4ble.protocol.KmfLineParser
+import com.juncehome.lifepo4ble.protocol.KmfReading
 import java.util.UUID
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -85,5 +88,57 @@ class BleStateReducerTest {
         assertFalse(afterPacket.hasAFrame)
         assertTrue(afterPacket.hasBFrame)
         assertEquals(0.0, afterPacket.latestReading.capacityAh, 0.001)
+    }
+
+    @Test
+    fun reconnectingToSameMeterKeepsLastReadingAndMergesPartialFramesOntoIt() {
+        val parser = KmfLineParser()
+        val uuid = UUID.fromString("11111111-1111-1111-1111-111111111111")
+        val meter = ScannedDevice(name = "KMF", address = "AA:BB:CC:DD:EE:FF", rssi = 0, serviceUuids = emptyList())
+        val lastGood = KmfReading(
+            voltageV = 13.5,
+            currentA = -0.08,
+            remainingAh = 160.8,
+            capacityAh = 180.0,
+            socPercent = 89.3,
+            chargeKwh = 115.6,
+            dischargeKwh = 114.1,
+        )
+        val before = BleUiState(selectedDevice = meter, latestReading = lastGood, lastReadingTimestampMs = 10L)
+
+        val connecting = BleStateReducer.reduce(before, BleEvent.Connecting(meter), parser, nowMs = 20L)
+        assertEquals(lastGood, connecting.latestReading)
+        assertEquals(10L, connecting.lastReadingTimestampMs)
+        assertFalse(connecting.hasAFrame)
+        assertFalse(connecting.hasBFrame)
+
+        // Lean A frame without capacity: live values update, capacity and totals stay.
+        val afterLeanA = BleStateReducer.reduce(
+            connecting,
+            BleEvent.NotificationReceived(uuid, ":A=1352,90,0,5000\n".encodeToByteArray()),
+            parser,
+            nowMs = 21L,
+        )
+        assertEquals(13.52, afterLeanA.latestReading.voltageV, 0.001)
+        assertEquals(180.0, afterLeanA.latestReading.capacityAh, 0.001)
+        assertTrue(afterLeanA.latestReading.socPercent > 0.0)
+        assertEquals(115.6, afterLeanA.latestReading.chargeKwh, 0.001)
+    }
+
+    @Test
+    fun connectingToAnotherMeterClearsReadingAndTimestamp() {
+        val parser = KmfLineParser()
+        val old = ScannedDevice(name = "KMF", address = "AA:BB:CC:DD:EE:FF", rssi = 0, serviceUuids = emptyList())
+        val other = old.copy(address = "11:22:33:44:55:66")
+        val before = BleUiState(
+            selectedDevice = old,
+            latestReading = KmfReading(voltageV = 13.5, capacityAh = 180.0),
+            lastReadingTimestampMs = 10L,
+        )
+
+        val connecting = BleStateReducer.reduce(before, BleEvent.Connecting(other), parser, nowMs = 20L)
+
+        assertEquals(KmfReading(), connecting.latestReading)
+        assertNull(connecting.lastReadingTimestampMs)
     }
 }

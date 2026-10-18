@@ -102,6 +102,7 @@ class CollectionControllerImpl(
     private var profile: GattProfile? = null
     private var hasAFrame = false
     private var hasBFrame = false
+    private var hasCFrame = false
     private var bootstrapJob: Job? = null
     private var pollJob: Job? = null
     private var reconnectJob: Job? = null
@@ -248,7 +249,7 @@ class CollectionControllerImpl(
             when (frame) {
                 is KmfFrame.A -> hasAFrame = true
                 is KmfFrame.B -> hasBFrame = true
-                is KmfFrame.C -> Unit
+                is KmfFrame.C -> hasCFrame = true
             }
         }
         val activeProfile = profile
@@ -291,10 +292,14 @@ class CollectionControllerImpl(
         pollJob?.cancel()
         pollJob = workScope.launch {
             while (isActive && mutableState.value.phase == CollectionPhase.COLLECTING) {
-                delay(pollIntervalMs())
+                // Until this session has energy totals, history skips samples, so ask for them right away.
+                val awaitingTotals = !hasCFrame
+                if (!awaitingTotals) delay(pollIntervalMs())
                 if (isActive && mutableState.value.phase == CollectionPhase.COLLECTING) {
+                    if (awaitingTotals) AppLog.d("collection totals poll: no C frame yet this session", TAG)
                     repository.write(KMF_TOTALS_POLL)
                 }
+                if (awaitingTotals) delay(TOTALS_RETRY_INTERVAL_MS)
             }
         }
     }
@@ -339,6 +344,7 @@ class CollectionControllerImpl(
         profile = null
         hasAFrame = false
         hasBFrame = false
+        hasCFrame = false
     }
 
     private suspend fun persistHistoryReset(deviceAddress: String) {
@@ -414,6 +420,7 @@ class CollectionControllerImpl(
         const val TAG = "KMF-BLE"
         const val FOREGROUND_POLL_INTERVAL_MS = CollectionCadence.FOREGROUND_POLL_INTERVAL_MS
         const val BACKGROUND_POLL_INTERVAL_MS = CollectionCadence.BACKGROUND_POLL_INTERVAL_MS
+        const val TOTALS_RETRY_INTERVAL_MS = 2_000L
         val RECONNECT_DELAYS_MS = longArrayOf(1_000L, 2_000L, 5_000L, 15_000L, 30_000L, 60_000L)
         val KMF_TOTALS_POLL = byteArrayOf(0x3A, 0x43, 0x0A)
     }
