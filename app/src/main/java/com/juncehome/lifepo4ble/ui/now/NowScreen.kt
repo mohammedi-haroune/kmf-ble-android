@@ -55,6 +55,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
@@ -117,7 +118,7 @@ fun NowRoute(
     LaunchedEffect(model.displayState) {
         AppLog.d(
             "Now: display state=${model.displayState} pill='${model.pill.label}' pillAction=${model.pill.action} " +
-                "statusNote='${model.dataLink.statusNote}' banner='${model.banner?.title}' " +
+                "link='${model.dataLink.stat}' banner='${model.banner?.title}' " +
                 "phase=${state.collectionState?.phase} hasValues=${model.hasValues}",
             TAG,
         )
@@ -540,48 +541,34 @@ private fun DataLinkCard(link: NowDataLink) {
         shape = RoundedCornerShape(KmfDimens.CardRadius),
         color = colors.surface,
     ) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (link.expanded) {
-                Row(Modifier.fillMaxWidth()) {
-                    Text("Data link \u00b7 last 60 s", style = MaterialTheme.typography.bodySmall, color = colors.textSecondary)
-                    Spacer(Modifier.weight(1f))
-                    Text(link.stat, style = KmfTheme.numbers.small, color = colors.textSecondary, maxLines = 1)
-                }
-                LinkTicks(
-                    ticks = link.ticks,
-                    mode = link.mode,
-                    fullHeight = 20.dp,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .semantics { contentDescription = "Frames received per second over the last minute: ${link.stat}" },
-                )
-                link.caption?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = link.captionTone.accent().accent)
-                }
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Data link", style = MaterialTheme.typography.bodySmall, color = colors.textSecondary)
-                    LinkTicks(
-                        ticks = link.compactTicks,
-                        mode = link.mode,
-                        fullHeight = 14.dp,
-                        modifier = Modifier
-                            .weight(1f)
-                            .semantics { contentDescription = "Frames received over the last 30 seconds: ${link.stat}" },
-                    )
-                    Text(link.stat, style = KmfTheme.numbers.small, color = colors.textSecondary, maxLines = 1)
-                }
-            }
-            link.statusNote?.let { note ->
-                Text(
-                    text = note,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (link.statusNoteTone == NowTone.Neutral) colors.textSecondary else link.statusNoteTone.accent().onTint,
-                )
-            }
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Data link", style = MaterialTheme.typography.bodySmall, color = colors.textSecondary)
+            LinkTicks(
+                ticks = link.compactTicks,
+                mode = link.mode,
+                fullHeight = 14.dp,
+                modifier = Modifier
+                    .weight(1f)
+                    .semantics { contentDescription = "Frames received over the last 30 seconds: ${link.stat}" },
+            )
+            // Fixed width so the tick strip never shifts when the label changes.
+            Text(
+                text = link.stat,
+                modifier = Modifier.width(DataLinkStatWidth),
+                style = KmfTheme.numbers.small,
+                color = if (link.statTone == NowTone.Neutral) colors.textSecondary else link.statTone.accent().accent,
+                maxLines = 1,
+                textAlign = TextAlign.End,
+            )
         }
     }
 }
+
+private val DataLinkStatWidth = 112.dp
 
 @Composable
 private fun LinkTicks(ticks: List<NowLinkTick>, mode: NowLinkMode, fullHeight: Dp, modifier: Modifier = Modifier) {
@@ -595,7 +582,7 @@ private fun LinkTicks(ticks: List<NowLinkTick>, mode: NowLinkMode, fullHeight: D
         val gap = 2.dp.toPx()
         val tickW = (size.width - gap * (ticks.size - 1)) / ticks.size
         val full = size.height
-        val missedH = if (fullHeight > 16.dp) 6.dp.toPx() else 4.dp.toPx()
+        val missedH = 4.dp.toPx()
         val lowH = 3.dp.toPx()
         ticks.forEachIndexed { index, tick ->
             val recent = index >= ticks.size - 4

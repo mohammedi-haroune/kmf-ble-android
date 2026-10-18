@@ -34,7 +34,7 @@ The autonomous `BatteryCollectionService` / `CollectionController` is the only n
 | Charging / Discharging | collecting, sign of current | accent blue / amber, battery-cell wave animation in flow card |
 | Low battery | SoC < 20 % | red SoC number, red bar, alert row under the bar |
 | Live pill | last frame ≤ 5 s old | green pill "Live · Ns ago" with pulse; 5–10 s green without pulse |
-| Stale data | no frame for > 10 s while connected | amber pill "No data · Ns"; Data link card expands; no fade, no banner |
+| Stale data | no frame for > 10 s while connected | amber pill "No data · Ns"; Data link label "stalled Ns"; no fade, no banner |
 | First sync | connected, no saved reading, waiting for both A and B | values "--", chart placeholder, blue "Syncing" pill |
 | Resyncing | connected again, saved reading exists, waiting for A and B | last values kept in full color, blue "Syncing" pill, estimate "Refreshing estimate…" |
 | Reconnecting | service retrying after a drop (1, 2, 5, 15, 30, 60 s backoff) | amber banner "Reconnecting in N s" + **Retry now** |
@@ -44,7 +44,7 @@ The autonomous `BatteryCollectionService` / `CollectionController` is the only n
 
 In every offline state the last values stay in full color (disconnects are frequent; never grey out the page). Cell animation stops. Chart gets a red dashed marker where data stopped. Live numbers are allowed to change every frame (it proves data is live). No dashed stream line on the flow card.
 
-Layout top to bottom: header (meter name button → Device, status pill) · optional banner · SoC (big) with voltage and Ah aligned on the last text baseline · 10-segment battery bar · flow card (cell icon, state label, "2h 54m · 17:26", power W and current A on the right) · power chart last 15 min (blue above zero, amber below, end dot) · Data link card (compact one line with 30 ticks when healthy, expanded 60 ticks + caption when not) · "Meter totals in … · out … kWh" line.
+Layout top to bottom: header (meter name button → Device, status pill) · optional banner · SoC (big) with voltage and Ah aligned on the last text baseline · 10-segment battery bar · flow card (cell icon, state label, "2h 54m · 17:26", power W and current A on the right) · power chart last 15 min (blue above zero, amber below, end dot) · Data link card (one fixed-height line in every state: 30 ticks plus a short state label such as "58/60 · steady", "syncing 1/2", "stalled 15s", "dropped", "out of range", "error", "off") · "Meter totals in … · out … kWh" line.
 
 ## First run
 
