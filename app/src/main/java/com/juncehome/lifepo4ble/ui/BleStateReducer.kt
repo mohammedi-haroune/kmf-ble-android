@@ -3,6 +3,7 @@ package com.juncehome.lifepo4ble.ui
 import com.juncehome.lifepo4ble.AppLog
 import com.juncehome.lifepo4ble.ble.BleEvent
 import com.juncehome.lifepo4ble.protocol.KmfLineParser
+import com.juncehome.lifepo4ble.protocol.KmfReading
 import com.juncehome.lifepo4ble.protocol.KmfReadingMerger
 import com.juncehome.lifepo4ble.protocol.KmfFrame
 import com.juncehome.lifepo4ble.protocol.PacketDirection
@@ -33,15 +34,22 @@ object BleStateReducer {
                 scanning = true,
                 devices = event.devices,
             )
-            is BleEvent.Connecting -> state.copy(
-                scanning = false,
-                selectedDevice = event.device,
-                connectionState = ConnectionState.CONNECTING,
-                hasAFrame = false,
-                hasBFrame = false,
-                latestReading = com.juncehome.lifepo4ble.protocol.KmfReading(),
-                latestError = null,
-            )
+            is BleEvent.Connecting -> {
+                // Reconnecting to the same meter keeps the last values on screen while the new
+                // session resyncs; partial frames then merge onto them instead of onto zeros.
+                val sameMeter = state.selectedDevice?.address == event.device.address
+                AppLog.d("connecting sameMeter=$sameMeter keepLastReading=$sameMeter", TAG)
+                state.copy(
+                    scanning = false,
+                    selectedDevice = event.device,
+                    connectionState = ConnectionState.CONNECTING,
+                    hasAFrame = false,
+                    hasBFrame = false,
+                    latestReading = if (sameMeter) state.latestReading else KmfReading(),
+                    lastReadingTimestampMs = if (sameMeter) state.lastReadingTimestampMs else null,
+                    latestError = null,
+                )
+            }
             is BleEvent.Connected -> state.copy(
                 selectedDevice = event.device,
                 connectionState = ConnectionState.CONNECTED,
