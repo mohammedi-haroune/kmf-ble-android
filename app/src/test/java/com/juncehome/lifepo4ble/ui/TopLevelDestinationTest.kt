@@ -8,41 +8,50 @@ class TopLevelDestinationTest {
     fun destinationsStayInBottomBarOrder() {
         assertEquals(
             listOf(
-                TopLevelDestination.Dashboard,
-                TopLevelDestination.Live,
-                TopLevelDestination.History,
-                TopLevelDestination.Energy,
-                TopLevelDestination.Diagnostic,
+                TopLevelDestination.Now,
+                TopLevelDestination.Trends,
+                TopLevelDestination.Device,
             ),
             TopLevelDestination.bottomBarItems,
         )
     }
 
     @Test
-    fun dashboardIsTheStartDestination() {
-        assertEquals(
-            TopLevelDestination.Dashboard,
-            TopLevelDestination.startDestination,
-        )
+    fun nowIsTheStartDestination() {
+        assertEquals(TopLevelDestination.Now, TopLevelDestination.startDestination)
     }
 
     @Test
     fun knownRoutesResolveToTheirDestination() {
-        assertEquals(
-            TopLevelDestination.Live,
-            TopLevelDestination.fromRoute("live"),
-        )
+        assertEquals(TopLevelDestination.Now, TopLevelDestination.fromRoute("now"))
+        assertEquals(TopLevelDestination.Trends, TopLevelDestination.fromRoute("trends"))
+        assertEquals(TopLevelDestination.Device, TopLevelDestination.fromRoute("device"))
     }
 
     @Test
-    fun unknownRoutesFallBackToDashboard() {
-        assertEquals(
-            TopLevelDestination.Dashboard,
-            TopLevelDestination.fromRoute("not-a-route"),
-        )
-        assertEquals(
-            TopLevelDestination.Dashboard,
-            TopLevelDestination.fromRoute(null),
-        )
+    fun routesAreMatchedIgnoringCaseAndWhitespace() {
+        assertEquals(TopLevelDestination.Trends, TopLevelDestination.fromRoute(" Trends "))
+    }
+
+    @Test
+    fun legacyRoutesMapToTheTabThatReplacedThem() {
+        assertEquals(TopLevelDestination.Now, TopLevelDestination.fromRoute("dashboard"))
+        assertEquals(TopLevelDestination.Trends, TopLevelDestination.fromRoute("live"))
+        assertEquals(TopLevelDestination.Trends, TopLevelDestination.fromRoute("history"))
+        assertEquals(TopLevelDestination.Trends, TopLevelDestination.fromRoute("energy"))
+        assertEquals(TopLevelDestination.Device, TopLevelDestination.fromRoute("diagnostic"))
+    }
+
+    @Test
+    fun unknownRoutesFallBackToNow() {
+        assertEquals(TopLevelDestination.Now, TopLevelDestination.fromRoute("not-a-route"))
+        assertEquals(TopLevelDestination.Now, TopLevelDestination.fromRoute(""))
+        assertEquals(TopLevelDestination.Now, TopLevelDestination.fromRoute(null))
+    }
+
+    @Test
+    fun routesAndLegacyRoutesAreUnique() {
+        val all = TopLevelDestination.entries.flatMap { listOf(it.route) + it.legacyRoutes }
+        assertEquals(all.size, all.toSet().size)
     }
 }

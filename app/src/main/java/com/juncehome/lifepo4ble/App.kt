@@ -9,13 +9,14 @@ import com.juncehome.lifepo4ble.ui.BleUiState
 import com.juncehome.lifepo4ble.ui.BleViewModel
 import com.juncehome.lifepo4ble.ui.KmfBleAppShell
 import com.juncehome.lifepo4ble.ui.TopLevelDestination
+import com.juncehome.lifepo4ble.ui.firstrun.FirstRunPlatformActions
 import com.juncehome.lifepo4ble.ui.theme.KmfBleTheme
 
 @Composable
 fun KmfBleApp(
     state: BleUiState,
     viewModel: BleViewModel,
-    onRequestPermissions: () -> Unit,
+    firstRunActions: FirstRunPlatformActions = FirstRunPlatformActions.None,
     startDestination: TopLevelDestination = TopLevelDestination.startDestination,
 ) {
     KmfBleTheme {
@@ -26,7 +27,7 @@ fun KmfBleApp(
             KmfBleAppShell(
                 state = state,
                 viewModel = viewModel,
-                onRequestPermissions = onRequestPermissions,
+                firstRunActions = firstRunActions,
                 startDestination = startDestination,
             )
         }

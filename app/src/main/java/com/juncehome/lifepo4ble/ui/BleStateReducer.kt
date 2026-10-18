@@ -12,6 +12,10 @@ object BleStateReducer {
     private const val MAX_PACKET_LOG_ENTRIES = 200
     private const val TAG = "KMF-BLE"
 
+    /** Frame times older than this are dropped; the Data link shows the last 60 s. */
+    const val FRAME_TIME_WINDOW_MS = 65_000L
+    private const val MAX_FRAME_TIMES = 512
+
     fun reduce(
         state: BleUiState,
         event: BleEvent,
@@ -69,6 +73,7 @@ object BleStateReducer {
                     hasBFrame = state.hasBFrame || frames.any { it is KmfFrame.B },
                     latestReading = reading,
                     lastReadingTimestampMs = nowMs,
+                    inboundFrameTimesMs = state.inboundFrameTimesMs.withFrameTimes(nowMs, frames.size),
                     packetLog = state.packetLog.plusBounded(
                         PacketFormatter.toEntry(nowMs, PacketDirection.INBOUND, event.bytes)
                     ),
@@ -103,6 +108,13 @@ object BleStateReducer {
                 )
             }
         }
+    }
+
+    /** Appends [count] frame times at [nowMs] and drops entries outside the window. */
+    fun List<Long>.withFrameTimes(nowMs: Long, count: Int): List<Long> {
+        val cutoff = nowMs - FRAME_TIME_WINDOW_MS
+        val kept = filter { it > cutoff }
+        return (kept + List(count) { nowMs }).takeLast(MAX_FRAME_TIMES)
     }
 
     private fun <T> List<T>.plusBounded(item: T): List<T> =

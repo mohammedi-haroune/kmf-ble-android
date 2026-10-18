@@ -45,6 +45,29 @@ class BleStateReducerTest {
     }
 
     @Test
+    fun parsedFramesAreRecordedForTheDataLinkAndPrunedAfterTheWindow() {
+        val parser = KmfLineParser()
+        val uuid = UUID.fromString("11111111-1111-1111-1111-111111111111")
+        val old = BleUiState(inboundFrameTimesMs = listOf(1_000L, 50_000L))
+
+        val partial = BleStateReducer.reduce(
+            old,
+            BleEvent.NotificationReceived(uuid, ":A=1234,25".encodeToByteArray()),
+            parser,
+            nowMs = 100_000L,
+        )
+        assertEquals(listOf(50_000L), partial.inboundFrameTimesMs)
+
+        val complete = BleStateReducer.reduce(
+            partial,
+            BleEvent.NotificationReceived(uuid, "00,1,120,2400,1000\n:B=1\n".encodeToByteArray()),
+            parser,
+            nowMs = 101_000L,
+        )
+        assertEquals(listOf(50_000L, 101_000L, 101_000L), complete.inboundFrameTimesMs)
+    }
+
+    @Test
     fun bFrameMarksBootstrapReadinessWithoutChangingReading() {
         val parser = KmfLineParser()
         val dataUuid = UUID.fromString("11111111-1111-1111-1111-111111111111")
