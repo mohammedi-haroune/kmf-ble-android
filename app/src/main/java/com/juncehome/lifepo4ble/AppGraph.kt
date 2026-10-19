@@ -103,6 +103,7 @@ class AppGraph(
         repository = repository,
         historyStore = historyRepository,
         scope = scope,
+        isBluetoothEnabled = { bluetoothManager.adapter?.isEnabled == true },
     )
 
     val bleViewModelFactory: ViewModelProvider.Factory = object : ViewModelProvider.Factory {

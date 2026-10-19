@@ -1,12 +1,14 @@
 package com.juncehome.lifepo4ble.collection
 
 import android.app.Service
+import android.bluetooth.BluetoothAdapter
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import com.juncehome.lifepo4ble.AppLog
 import com.juncehome.lifepo4ble.BleApplication
+import com.juncehome.lifepo4ble.platform.BluetoothAdapterStateObserver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -76,16 +78,27 @@ data class CollectionServiceCommand(
 }
 
 class BatteryCollectionService : Service() {
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // The controller is not thread-safe; the main thread serializes BLE events, service commands,
+    // adapter broadcasts and its own timers.
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private lateinit var controller: CollectionController
     private lateinit var commandRouter: CollectionServiceCommandRouter
     private lateinit var statusRelay: CollectionStatusRelay
+    private lateinit var bluetoothStateObserver: BluetoothAdapterStateObserver
     private var startedConfiguration: CollectionConfiguration? = null
 
     override fun onCreate() {
         super.onCreate()
         val graph = (application as BleApplication).graph
         controller = graph.createCollectionController(serviceScope)
+        bluetoothStateObserver = BluetoothAdapterStateObserver(this) { state ->
+            when (state) {
+                BluetoothAdapter.STATE_ON -> controller.onBluetoothStateChanged(enabled = true)
+                BluetoothAdapter.STATE_TURNING_OFF,
+                BluetoothAdapter.STATE_OFF -> controller.onBluetoothStateChanged(enabled = false)
+            }
+        }
+        bluetoothStateObserver.register()
         statusRelay = graph.collectionStatusRelay
         commandRouter = CollectionServiceCommandRouter(
             controller = controller,
@@ -144,6 +157,7 @@ class BatteryCollectionService : Service() {
     }
 
     override fun onDestroy() {
+        bluetoothStateObserver.unregister()
         controller.close()
         statusRelay.publish(controller.state.value)
         serviceScope.cancel()

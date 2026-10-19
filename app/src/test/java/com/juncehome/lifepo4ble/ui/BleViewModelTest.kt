@@ -1190,7 +1190,7 @@ class BleViewModelTest {
             stopScanCalls += 1
         }
 
-        override fun connect(device: ScannedDevice, preferred: DeviceSnapshot?) {
+        override fun connect(device: ScannedDevice, preferred: DeviceSnapshot?, autoConnect: Boolean) {
             connectCalls += device to preferred
         }
 

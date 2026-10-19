@@ -65,6 +65,7 @@ object CollectionNotification {
         CollectionPhase.CONNECTING,
         CollectionPhase.BOOTSTRAPPING -> "Connecting to meter"
         CollectionPhase.WAITING_FOR_DEVICE -> "Meter is out of range"
+        CollectionPhase.BLUETOOTH_OFF -> "Bluetooth is off; collection resumes when it is back on"
         CollectionPhase.ERROR -> "Collection paused: ${state.error ?: "connection error"}"
         CollectionPhase.STOPPED -> "Collection stopped"
     }

@@ -28,6 +28,7 @@ enum class NowDisplayState {
     Stale,
     Reconnecting,
     OutOfRange,
+    BluetoothOff,
     CollectionError,
     CollectionOff,
 
@@ -36,7 +37,7 @@ enum class NowDisplayState {
     ;
 
     val isOffline: Boolean
-        get() = this == Reconnecting || this == OutOfRange || this == CollectionError ||
+        get() = this == Reconnecting || this == OutOfRange || this == BluetoothOff || this == CollectionError ||
             this == CollectionOff || this == NoMeter
 
     val isSyncing: Boolean
@@ -242,6 +243,7 @@ object NowScreenReducer {
         return when (phase) {
             CollectionPhase.STOPPED -> NowDisplayState.CollectionOff
             CollectionPhase.WAITING_FOR_DEVICE -> NowDisplayState.OutOfRange
+            CollectionPhase.BLUETOOTH_OFF -> NowDisplayState.BluetoothOff
             CollectionPhase.ERROR -> if (collection?.nextReconnectAtMs != null) {
                 NowDisplayState.Reconnecting
             } else {
@@ -300,6 +302,7 @@ object NowScreenReducer {
                 )
             }
             NowDisplayState.OutOfRange -> NowPill("Out of range", NowTone.Neutral, StatusPillIndicator.Steady)
+            NowDisplayState.BluetoothOff -> NowPill("Bluetooth off", NowTone.Neutral, StatusPillIndicator.Steady)
             NowDisplayState.CollectionError -> NowPill(
                 label = "Paused $DOT Retry",
                 tone = NowTone.Error,
@@ -528,6 +531,7 @@ object NowScreenReducer {
             NowDisplayState.Stale -> "stalled ${formatAge(frameAgeMs ?: 0L)}" to NowTone.Discharge
             NowDisplayState.Reconnecting -> "dropped" to NowTone.Discharge
             NowDisplayState.OutOfRange -> "out of range" to NowTone.Neutral
+            NowDisplayState.BluetoothOff -> "bluetooth off" to NowTone.Neutral
             NowDisplayState.CollectionError -> "error" to NowTone.Error
             NowDisplayState.CollectionOff -> "off" to NowTone.Neutral
             NowDisplayState.NoMeter -> "no meter" to NowTone.Neutral

@@ -1,6 +1,7 @@
 package com.juncehome.lifepo4ble.collection
 
 import com.juncehome.lifepo4ble.AppLog
+import com.juncehome.lifepo4ble.ble.AndroidBleSession
 import com.juncehome.lifepo4ble.ble.BleEvent
 import com.juncehome.lifepo4ble.ble.BleRepositoryContract
 import com.juncehome.lifepo4ble.ble.GattProfile
@@ -34,7 +35,7 @@ object CollectionCadence {
     const val BACKGROUND_POLL_INTERVAL_MS = 300_000L
 }
 
-enum class CollectionPhase { STOPPED, WAITING_FOR_DEVICE, CONNECTING, BOOTSTRAPPING, COLLECTING, ERROR }
+enum class CollectionPhase { STOPPED, BLUETOOTH_OFF, WAITING_FOR_DEVICE, CONNECTING, BOOTSTRAPPING, COLLECTING, ERROR }
 
 data class CollectionState(
     val phase: CollectionPhase,
@@ -61,9 +62,12 @@ interface CollectionController {
 
     fun onDeviceDisappeared(address: String)
 
+    /** Bluetooth adapter on/off; off parks collection, on reconnects right away. */
+    fun onBluetoothStateChanged(enabled: Boolean)
+
     fun stopByUser()
 
-    /** User-requested immediate reconnect from the Now tab; only acts while a retry is pending (ERROR). */
+    /** User-requested immediate reconnect; acts whenever the meter is not linked (retry pending, waiting, stuck connecting). */
     fun reconnectNow()
 
     fun close()
@@ -72,12 +76,26 @@ interface CollectionController {
 /**
  * Owns collection policy only. The caller supplies the BLE transport and the scope that schedules work,
  * allowing the same policy to run from a foreground service or a companion-device callback.
+ *
+ * The scope must be single-threaded (the service uses the main thread): all state here is unsynchronized.
+ *
+ * Reconnect policy: every stage has a deadline so no state can hang.
+ * - Direct connect attempts (fast, [CONNECT_TIMEOUT_MS] each) after 1 s, 2 s and 5 s.
+ * - Then a background autoConnect that the Bluetooth controller holds until the meter advertises again.
+ *   It needs no app timer, so it also works while the phone dozes; it is refreshed every
+ *   [BACKGROUND_REFRESH_MS] in case the stack dropped it.
+ * - From GATT connected to parsed A+B frames: [SETUP_TIMEOUT_MS].
+ * - While collecting: after [LIVENESS_PROBE_AFTER_MS] of silence a `:C` probe is sent; with no
+ *   notification at all for [LIVENESS_DEAD_AFTER_MS] the link is treated as dead.
+ * - Bluetooth off parks collection in BLUETOOTH_OFF; Bluetooth on reconnects immediately.
  */
 class CollectionControllerImpl(
     private val repository: BleRepositoryContract,
     private val historyStore: KmfHistoryStore,
     scope: CoroutineScope,
     private val clock: () -> Long = { System.currentTimeMillis() },
+    private val monotonicClock: () -> Long = { System.nanoTime() / 1_000_000L },
+    private val isBluetoothEnabled: () -> Boolean = { true },
 ) : CollectionController {
     private val controllerJob = SupervisorJob(scope.coroutineContext[Job])
     private val workScope = CoroutineScope(scope.coroutineContext + controllerJob)
@@ -94,6 +112,13 @@ class CollectionControllerImpl(
     private var configuration: CollectionConfiguration? = null
     private var deviceUnavailable = false
     private var stoppedByUser = false
+    private var bluetoothEnabled = true
+    private var linkUp = false
+    private var backgroundAttempt = false
+    private var lastNotificationAtMs = 0L
+
+    /** Disconnected events that [releaseLink] makes the repository emit; they are not link failures. */
+    private var pendingReleaseDisconnects = 0
     private var reconnectAttempt = 0
     private var failureStreak = 0
     private var linkDroppedAtMs: Long? = null
@@ -106,6 +131,8 @@ class CollectionControllerImpl(
     private var bootstrapJob: Job? = null
     private var pollJob: Job? = null
     private var reconnectJob: Job? = null
+    private var watchdogJob: Job? = null
+    private var livenessJob: Job? = null
 
     private val eventJob = workScope.launch {
         repository.events.collect(::handleEvent)
@@ -126,6 +153,12 @@ class CollectionControllerImpl(
             updateState(CollectionPhase.STOPPED)
             return
         }
+        bluetoothEnabled = isBluetoothEnabled()
+        if (!bluetoothEnabled) {
+            AppLog.w("collection start: Bluetooth is off; waiting for it to turn on", TAG)
+            updateState(CollectionPhase.BLUETOOTH_OFF, error = AndroidBleSession.BLUETOOTH_OFF_MESSAGE)
+            return
+        }
         connectConfiguredDevice()
     }
 
@@ -138,33 +171,63 @@ class CollectionControllerImpl(
 
     override fun onDeviceAppeared(address: String) {
         val activeConfiguration = configuration ?: return
-        if (stoppedByUser || address != activeConfiguration.snapshot.address) {
+        // CDM reports lowercase MACs while the saved snapshot is uppercase.
+        if (stoppedByUser || !address.equals(activeConfiguration.snapshot.address, ignoreCase = true)) {
+            AppLog.d("collection ignored device appeared address=$address", TAG)
             return
         }
         deviceUnavailable = false
-        if (mutableState.value.phase == CollectionPhase.WAITING_FOR_DEVICE ||
-            mutableState.value.phase == CollectionPhase.ERROR
-        ) {
-            cancelReconnect()
+        val phase = mutableState.value.phase
+        AppLog.d("collection device appeared phase=$phase background=$backgroundAttempt bluetooth=$bluetoothEnabled", TAG)
+        if (!bluetoothEnabled) return
+        if (phase == CollectionPhase.WAITING_FOR_DEVICE || phase == CollectionPhase.ERROR) {
+            // A direct attempt now beats waiting on the backoff timer or the slower background connect.
+            resetBackoff()
             connectConfiguredDevice()
         }
     }
 
     override fun onDeviceDisappeared(address: String) {
-        if (address != configuration?.snapshot?.address) {
+        if (configuration == null || !address.equals(configuration?.snapshot?.address, ignoreCase = true)) {
+            AppLog.d("collection ignored device disappeared address=$address", TAG)
             return
         }
         deviceUnavailable = true
-        cancelCollectionJobs()
-        repository.disconnect()
-        updateState(CollectionPhase.WAITING_FOR_DEVICE)
+        val phase = mutableState.value.phase
+        if (linkUp || phase == CollectionPhase.BOOTSTRAPPING || phase == CollectionPhase.COLLECTING) {
+            // The live link is the source of truth; presence scans can miss a connected meter.
+            AppLog.d("collection device disappeared while linked (phase=$phase); keeping the link", TAG)
+            return
+        }
+        if (phase == CollectionPhase.ERROR || (phase == CollectionPhase.CONNECTING && !backgroundAttempt)) {
+            AppLog.d("collection device disappeared during reconnect (phase=$phase); switching to background connect", TAG)
+            cancelCollectionJobs()
+            releaseLink()
+            failureStreak += 1
+            if (linkDroppedAtMs == null) linkDroppedAtMs = clock()
+            startBackgroundConnect(error = "Meter is out of range", delayMs = 0L)
+        }
+    }
+
+    override fun onBluetoothStateChanged(enabled: Boolean) {
+        if (enabled == bluetoothEnabled) return
+        bluetoothEnabled = enabled
+        AppLog.d("collection Bluetooth ${if (enabled) "on" else "off"} phase=${mutableState.value.phase}", TAG)
+        if (configuration == null || stoppedByUser) return
+        if (!enabled) {
+            enterBluetoothOff()
+        } else {
+            resetBackoff()
+            deviceUnavailable = false
+            connectConfiguredDevice()
+        }
     }
 
     override fun stopByUser() {
         stoppedByUser = true
         configuration = null
         cancelCollectionJobs()
-        repository.disconnect()
+        releaseLink()
         updateState(CollectionPhase.STOPPED)
     }
 
@@ -174,13 +237,13 @@ class CollectionControllerImpl(
             AppLog.w("collection reconnectNow ignored: collection is stopped (phase=$phase)", TAG)
             return
         }
-        if (phase != CollectionPhase.ERROR) {
-            AppLog.d("collection reconnectNow ignored in phase=$phase", TAG)
+        if (phase !in RECONNECTABLE_PHASES || !bluetoothEnabled) {
+            AppLog.d("collection reconnectNow ignored in phase=$phase bluetooth=$bluetoothEnabled", TAG)
             return
         }
-        AppLog.d("collection reconnectNow: cancelling scheduled retry attempt=$failureStreak and connecting", TAG)
-        cancelReconnect()
+        AppLog.d("collection reconnectNow: phase=$phase attempt=$failureStreak; connecting now", TAG)
         deviceUnavailable = false
+        resetBackoff()
         connectConfiguredDevice()
     }
 
@@ -191,46 +254,49 @@ class CollectionControllerImpl(
     }
 
     private suspend fun handleEvent(event: BleEvent) {
+        if (event is BleEvent.Disconnected && pendingReleaseDisconnects > 0) {
+            pendingReleaseDisconnects -= 1
+            AppLog.d("collection ignored disconnect caused by releasing the link", TAG)
+            return
+        }
         val activeConfiguration = configuration ?: return
         if (stoppedByUser) {
             return
         }
         when (event) {
             is BleEvent.Connecting -> {
-                if (event.device.address != activeConfiguration.snapshot.address) return
-                cancelReconnect()
+                if (!event.device.address.equals(activeConfiguration.snapshot.address, ignoreCase = true)) return
                 resetProtocolSession()
-                persistHistoryReset(event.device.address)
-                updateState(CollectionPhase.CONNECTING)
+                persistHistoryReset(activeConfiguration.snapshot.address)
             }
             is BleEvent.Connected -> {
-                if (event.device.address != activeConfiguration.snapshot.address) return
+                if (!event.device.address.equals(activeConfiguration.snapshot.address, ignoreCase = true)) return
+                linkUp = true
                 updateState(CollectionPhase.CONNECTING)
+                armWatchdog(SETUP_TIMEOUT_MS, "Meter setup timed out")
             }
             is BleEvent.ServicesDiscovered -> {
+                linkUp = true
                 resetProtocolSession()
                 profile = event.profile
                 updateState(CollectionPhase.BOOTSTRAPPING)
+                armWatchdog(SETUP_TIMEOUT_MS, "Meter did not start streaming")
                 startBootstrap()
             }
             is BleEvent.NotificationReceived -> handleNotification(event, activeConfiguration)
             is BleEvent.Disconnected -> {
-                cancelBootstrapAndPolling()
-                resetProtocolSession()
-                if (deviceUnavailable) {
-                    updateState(CollectionPhase.WAITING_FOR_DEVICE)
-                } else {
-                    scheduleReconnect(event.reason ?: "BLE disconnected")
-                }
+                if (!bluetoothEnabled) return
+                failAttempt(event.reason ?: "BLE disconnected", releaseLink = false)
             }
             is BleEvent.Error -> {
-                cancelBootstrapAndPolling()
-                resetProtocolSession()
-                if (deviceUnavailable) {
-                    updateState(CollectionPhase.WAITING_FOR_DEVICE)
-                } else {
-                    scheduleReconnect(event.message)
+                if (!bluetoothEnabled) return
+                if (event.message == AndroidBleSession.BLUETOOTH_OFF_MESSAGE && !isBluetoothEnabled()) {
+                    bluetoothEnabled = false
+                    enterBluetoothOff()
+                    return
                 }
+                // The session may still hold a connected GATT (failed discovery or CCCD); free it.
+                failAttempt(event.message, releaseLink = true)
             }
             is BleEvent.Scanning,
             is BleEvent.ScanResults,
@@ -267,15 +333,45 @@ class CollectionControllerImpl(
                 mergedReading = reading,
             ),
         )
+        lastNotificationAtMs = monotonicClock()
         if (hasAFrame && hasBFrame && mutableState.value.phase != CollectionPhase.COLLECTING) {
-            reconnectAttempt = 0
-            failureStreak = 0
-            linkDroppedAtMs = null
+            resetBackoff()
+            linkUp = true
+            deviceUnavailable = false
             cancelReconnect()
+            cancelWatchdog()
             bootstrapJob?.cancel()
             bootstrapJob = null
             updateState(CollectionPhase.COLLECTING)
             startPolling()
+            startLivenessCheck()
+        }
+    }
+
+    /**
+     * The meter's notification rate varies a lot (about 1 Hz after startup, gaps of minutes later),
+     * so silence alone is not a dead link: ask for totals first and only give up when even that
+     * gets no answer.
+     */
+    private fun startLivenessCheck() {
+        livenessJob?.cancel()
+        livenessJob = workScope.launch {
+            while (isActive && mutableState.value.phase == CollectionPhase.COLLECTING) {
+                delay(LIVENESS_CHECK_INTERVAL_MS)
+                if (mutableState.value.phase != CollectionPhase.COLLECTING) break
+                val silentMs = monotonicClock() - lastNotificationAtMs
+                when {
+                    silentMs >= LIVENESS_DEAD_AFTER_MS -> {
+                        AppLog.w("collection liveness: no notification for $silentMs ms; reconnecting", TAG)
+                        failAttempt("No data from the meter for ${silentMs / 1_000L} s", releaseLink = true)
+                        break
+                    }
+                    silentMs >= LIVENESS_PROBE_AFTER_MS -> {
+                        val queued = repository.write(KMF_TOTALS_POLL)
+                        AppLog.d("collection liveness: silent for $silentMs ms; probe :C queued=$queued", TAG)
+                    }
+                }
+            }
         }
     }
 
@@ -304,15 +400,45 @@ class CollectionControllerImpl(
         }
     }
 
-    private fun scheduleReconnect(error: String) {
-        if (reconnectJob?.isActive == true || configuration == null || stoppedByUser || deviceUnavailable) {
+    /** Ends the current attempt or session after a failure and schedules the next attempt. */
+    private fun failAttempt(error: String, releaseLink: Boolean) {
+        if (configuration == null || stoppedByUser || !bluetoothEnabled) return
+        if (reconnectJob?.isActive == true) {
+            AppLog.d("collection failure ignored; reconnect already pending: $error", TAG)
             return
         }
-        val delayMs = RECONNECT_DELAYS_MS[reconnectAttempt]
-        reconnectAttempt = (reconnectAttempt + 1).coerceAtMost(RECONNECT_DELAYS_MS.lastIndex)
+        // A link that came up but never reached COLLECTING is a setup failure, not a range problem.
+        val setupFailed = linkUp && mutableState.value.phase != CollectionPhase.COLLECTING
+        AppLog.d(
+            "collection attempt failed phase=${mutableState.value.phase} setupFailed=$setupFailed " +
+                "background=$backgroundAttempt deviceUnavailable=$deviceUnavailable error=$error",
+            TAG,
+        )
+        cancelBootstrapAndPolling()
+        cancelWatchdog()
+        resetProtocolSession()
+        if (releaseLink) releaseLink()
+        linkUp = false
+        scheduleReconnect(error, setupFailed)
+    }
+
+    private fun scheduleReconnect(error: String, setupFailed: Boolean) {
         failureStreak += 1
         val nowMs = clock()
         if (linkDroppedAtMs == null) linkDroppedAtMs = nowMs
+        if (deviceUnavailable || reconnectAttempt >= DIRECT_RETRY_DELAYS_MS.size) {
+            // A meter that is simply absent is best left to the Bluetooth controller right away.
+            // Re-issuing at once after a failed setup or a failed background request would spin.
+            val delayMs = when {
+                setupFailed -> BACKGROUND_RETRY_AFTER_SETUP_FAILURE_MS
+                backgroundAttempt -> BACKGROUND_RETRY_AFTER_FAILURE_MS
+                else -> 0L
+            }
+            startBackgroundConnect(error, delayMs)
+            return
+        }
+        val delayMs = DIRECT_RETRY_DELAYS_MS[reconnectAttempt]
+        reconnectAttempt += 1
         AppLog.d("collection reconnect scheduled attempt=$failureStreak delayMs=$delayMs error=$error", TAG)
         updateState(
             CollectionPhase.ERROR,
@@ -320,10 +446,27 @@ class CollectionControllerImpl(
             error = error,
             nextReconnectAtMs = nowMs + delayMs,
         )
+        launchReconnect(delayMs) { connectConfiguredDevice() }
+    }
+
+    /** Parks in WAITING_FOR_DEVICE with an autoConnect request the Bluetooth controller completes. */
+    private fun startBackgroundConnect(error: String, delayMs: Long) {
+        AppLog.d("collection background connect attempt=$failureStreak delayMs=$delayMs error=$error", TAG)
+        updateState(CollectionPhase.WAITING_FOR_DEVICE, error = error)
+        if (delayMs == 0L) {
+            cancelReconnect()
+            connectInBackground()
+        } else {
+            launchReconnect(delayMs) { connectInBackground() }
+        }
+    }
+
+    private fun launchReconnect(delayMs: Long, connect: () -> Unit) {
+        cancelReconnect()
         reconnectJob = workScope.launch {
             delay(delayMs)
-            if (isActive && configuration != null && !stoppedByUser && !deviceUnavailable) {
-                connectConfiguredDevice()
+            if (isActive && configuration != null && !stoppedByUser && bluetoothEnabled) {
+                connect()
             }
         }.also { job ->
             job.invokeOnCompletion {
@@ -334,8 +477,70 @@ class CollectionControllerImpl(
 
     private fun connectConfiguredDevice() {
         val activeConfiguration = configuration ?: return
+        cancelCollectionJobs()
+        backgroundAttempt = false
+        linkUp = false
         updateState(CollectionPhase.CONNECTING)
+        armWatchdog(CONNECT_TIMEOUT_MS, "Connection attempt timed out")
         repository.connect(activeConfiguration.snapshot.toScannedDevice(), activeConfiguration.snapshot)
+    }
+
+    private fun connectInBackground() {
+        val activeConfiguration = configuration ?: return
+        backgroundAttempt = true
+        linkUp = false
+        cancelWatchdog()
+        repository.connect(
+            activeConfiguration.snapshot.toScannedDevice(),
+            activeConfiguration.snapshot,
+            autoConnect = true,
+        )
+        // No connect deadline: the controller waits for the meter. Only re-issue the request in case
+        // the stack silently dropped it.
+        watchdogJob = workScope.launch {
+            delay(BACKGROUND_REFRESH_MS)
+            if (mutableState.value.phase == CollectionPhase.WAITING_FOR_DEVICE && backgroundAttempt) {
+                AppLog.d("collection background connect refresh after $BACKGROUND_REFRESH_MS ms", TAG)
+                connectInBackground()
+            }
+        }
+    }
+
+    private fun enterBluetoothOff() {
+        AppLog.w("collection parked: Bluetooth is off", TAG)
+        cancelCollectionJobs()
+        resetProtocolSession()
+        releaseLink()
+        linkUp = false
+        backgroundAttempt = false
+        updateState(CollectionPhase.BLUETOOTH_OFF, error = AndroidBleSession.BLUETOOTH_OFF_MESSAGE)
+    }
+
+    /** Closes the GATT; the repository's resulting Disconnected event is consumed in [handleEvent]. */
+    private fun releaseLink() {
+        pendingReleaseDisconnects += 1
+        repository.disconnect()
+    }
+
+    private fun armWatchdog(timeoutMs: Long, reason: String) {
+        cancelWatchdog()
+        watchdogJob = workScope.launch {
+            delay(timeoutMs)
+            AppLog.w("collection watchdog fired after $timeoutMs ms phase=${mutableState.value.phase}: $reason", TAG)
+            watchdogJob = null
+            failAttempt(reason, releaseLink = true)
+        }
+    }
+
+    private fun cancelWatchdog() {
+        watchdogJob?.cancel()
+        watchdogJob = null
+    }
+
+    private fun resetBackoff() {
+        reconnectAttempt = 0
+        failureStreak = 0
+        linkDroppedAtMs = null
     }
 
     private fun resetProtocolSession() {
@@ -368,6 +573,7 @@ class CollectionControllerImpl(
     private fun cancelCollectionJobs() {
         cancelBootstrapAndPolling()
         cancelReconnect()
+        cancelWatchdog()
     }
 
     private fun cancelBootstrapAndPolling() {
@@ -375,6 +581,8 @@ class CollectionControllerImpl(
         bootstrapJob = null
         pollJob?.cancel()
         pollJob = null
+        livenessJob?.cancel()
+        livenessJob = null
     }
 
     private fun cancelReconnect() {
@@ -421,7 +629,20 @@ class CollectionControllerImpl(
         const val FOREGROUND_POLL_INTERVAL_MS = CollectionCadence.FOREGROUND_POLL_INTERVAL_MS
         const val BACKGROUND_POLL_INTERVAL_MS = CollectionCadence.BACKGROUND_POLL_INTERVAL_MS
         const val TOTALS_RETRY_INTERVAL_MS = 2_000L
-        val RECONNECT_DELAYS_MS = longArrayOf(1_000L, 2_000L, 5_000L, 15_000L, 30_000L, 60_000L)
+        val DIRECT_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 5_000L)
+        const val CONNECT_TIMEOUT_MS = 20_000L
+        const val SETUP_TIMEOUT_MS = 30_000L
+        const val BACKGROUND_RETRY_AFTER_SETUP_FAILURE_MS = 30_000L
+        const val BACKGROUND_RETRY_AFTER_FAILURE_MS = 15_000L
+        const val BACKGROUND_REFRESH_MS = 10 * 60_000L
+        const val LIVENESS_CHECK_INTERVAL_MS = 15_000L
+        const val LIVENESS_PROBE_AFTER_MS = 60_000L
+        const val LIVENESS_DEAD_AFTER_MS = 120_000L
+        val RECONNECTABLE_PHASES = setOf(
+            CollectionPhase.ERROR,
+            CollectionPhase.WAITING_FOR_DEVICE,
+            CollectionPhase.CONNECTING,
+        )
         val KMF_TOTALS_POLL = byteArrayOf(0x3A, 0x43, 0x0A)
     }
 }

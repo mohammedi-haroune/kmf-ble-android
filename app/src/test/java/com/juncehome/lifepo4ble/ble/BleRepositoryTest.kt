@@ -76,7 +76,7 @@ class BleRepositoryTest {
     private class FakeBleSession : BleSession {
         var connectedDevice: ScannedDevice? = null
 
-        override fun connect(device: ScannedDevice, preferred: DeviceSnapshot?): Flow<BleEvent> {
+        override fun connect(device: ScannedDevice, preferred: DeviceSnapshot?, autoConnect: Boolean): Flow<BleEvent> {
             connectedDevice = device
             return emptyFlow()
         }
