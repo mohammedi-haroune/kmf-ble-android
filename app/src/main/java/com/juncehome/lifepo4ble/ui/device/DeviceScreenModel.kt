@@ -199,6 +199,11 @@ object DeviceScreenReducer {
             )
             CollectionPhase.CONNECTING, CollectionPhase.BOOTSTRAPPING ->
                 Triple(DeviceTone.Live, false, "Connecting to the meter$ELLIPSIS")
+            CollectionPhase.BLUETOOTH_OFF -> Triple(
+                DeviceTone.Warning,
+                false,
+                "Bluetooth is off" + (ageLabel?.let { " $DOT last sample $it" } ?: ""),
+            )
             CollectionPhase.WAITING_FOR_DEVICE -> Triple(
                 DeviceTone.Neutral,
                 false,

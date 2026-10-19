@@ -103,6 +103,8 @@ class CollectionServiceCommandTest {
             disappearedAddresses += address
         }
 
+        override fun onBluetoothStateChanged(enabled: Boolean) = Unit
+
         override fun stopByUser() {
             userStops += 1
             operationLog?.add("controller-stop")

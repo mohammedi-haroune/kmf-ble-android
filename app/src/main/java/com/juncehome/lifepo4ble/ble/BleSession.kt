@@ -31,7 +31,12 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 interface BleSession {
-    fun connect(device: ScannedDevice, preferred: DeviceSnapshot?): Flow<BleEvent>
+    /**
+     * Opens one GATT session. [autoConnect] = false is a fast direct attempt the caller must time out;
+     * true hands the attempt to the Bluetooth controller, which completes it whenever the device next
+     * advertises (no timeout, and it wakes the app from doze).
+     */
+    fun connect(device: ScannedDevice, preferred: DeviceSnapshot?, autoConnect: Boolean = false): Flow<BleEvent>
 
     fun write(bytes: ByteArray): Boolean
 
@@ -43,20 +48,31 @@ interface BleSession {
 class AndroidBleSession(
     private val context: Context,
     private val bluetoothManager: BluetoothManager,
-    private val queue: GattOperationQueue = GattOperationQueue(),
 ) : BleSession {
     private var activeGatt: BluetoothGatt? = null
+    private var activeQueue: GattOperationQueue? = null
     private var activeScope: CoroutineScope? = null
     private var activeEvents: SendChannel<BleEvent>? = null
     private var activeWriteCharacteristic: BluetoothGattCharacteristic? = null
 
     @SuppressLint("MissingPermission")
-    override fun connect(device: ScannedDevice, preferred: DeviceSnapshot?): Flow<BleEvent> = callbackFlow {
-        AppLog.d("session.connect(address=${device.address}, name=${device.name}, preferred=${preferred?.serviceUuid ?: "none"})", TAG)
+    override fun connect(device: ScannedDevice, preferred: DeviceSnapshot?, autoConnect: Boolean): Flow<BleEvent> = callbackFlow {
+        AppLog.d(
+            "session.connect(address=${device.address}, name=${device.name}, " +
+                "preferred=${preferred?.serviceUuid ?: "none"}, autoConnect=$autoConnect)",
+            TAG,
+        )
         val adapter = bluetoothManager.adapter
         if (adapter == null) {
             AppLog.e("Bluetooth adapter is not available", tag = TAG)
             trySend(BleEvent.Error("Bluetooth adapter is not available"))
+            close()
+            return@callbackFlow
+        }
+        if (!adapter.isEnabled) {
+            // connectGatt() with the adapter off can return a client that never calls back.
+            AppLog.w("session.connect refused: Bluetooth is off", TAG)
+            trySend(BleEvent.Error(BLUETOOTH_OFF_MESSAGE))
             close()
             return@callbackFlow
         }
@@ -69,8 +85,11 @@ class AndroidBleSession(
         }
 
         val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val queue = GattOperationQueue()
+        val events: SendChannel<BleEvent> = this
         activeScope = sessionScope
-        activeEvents = this
+        activeEvents = events
+        activeQueue = queue
 
         val callback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
@@ -86,8 +105,12 @@ class AndroidBleSession(
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
                         AppLog.d("GATT disconnected status=$status", TAG)
-                        clearActiveSession()
+                        // Release the client right away: a disconnected but unclosed BluetoothGatt
+                        // leaks a stack client slot and can swallow the next connection's callbacks.
+                        clearActiveSession(gatt)
+                        disconnectGatt(gatt, queue)
                         trySend(BleEvent.Disconnected("GATT disconnected with status $status"))
+                        close()
                     }
                 }
             }
@@ -140,6 +163,10 @@ class AndroidBleSession(
                         return@launch
                     }
 
+                    if (activeGatt !== gatt) {
+                        AppLog.w("Ignoring CCCD completion for a stale GATT session", TAG)
+                        return@launch
+                    }
                     activeWriteCharacteristic = writeCharacteristic
                     AppLog.d("Write characteristic ready ${writeCharacteristic.uuid}", TAG)
                     trySend(BleEvent.ServicesDiscovered(profile))
@@ -191,7 +218,7 @@ class AndroidBleSession(
 
         val gatt = try {
             AppLog.d("connectGatt(${device.address})", TAG)
-            bluetoothDevice.connectLeGatt(context, callback)
+            bluetoothDevice.connectLeGatt(context, callback, autoConnect)
         } catch (securityException: SecurityException) {
             AppLog.e("Missing Bluetooth connect permission", securityException, TAG)
             trySend(BleEvent.Error("Missing Bluetooth connect permission", securityException))
@@ -208,8 +235,10 @@ class AndroidBleSession(
         activeGatt = gatt
 
         awaitClose {
+            AppLog.d("session flow closed; releasing GATT client", TAG)
             sessionScope.cancel()
-            disconnectGatt(gatt)
+            clearActiveSession(gatt)
+            disconnectGatt(gatt, queue)
         }
     }
 
@@ -218,10 +247,11 @@ class AndroidBleSession(
         val writeCharacteristic = activeWriteCharacteristic ?: return false
         val events = activeEvents ?: return false
         val scope = activeScope ?: return false
+        val queue = activeQueue ?: return false
 
         AppLog.d("write(${bytes.size} bytes) hex=${bytes.toHexString()}", TAG)
         scope.launch {
-            writeGattBytes(gatt, writeCharacteristic, bytes, events)
+            writeGattBytes(gatt, writeCharacteristic, bytes, events, queue)
         }
         return true
     }
@@ -241,8 +271,13 @@ class AndroidBleSession(
     override fun disconnect() {
         AppLog.d("session.disconnect()", TAG)
         activeScope?.cancel()
-        activeGatt?.let { disconnectGatt(it) }
-        clearActiveSession()
+        val gatt = activeGatt
+        val queue = activeQueue
+        activeEvents?.close()
+        if (gatt != null) {
+            clearActiveSession(gatt)
+            disconnectGatt(gatt, queue)
+        }
     }
 
     private suspend fun writeGattBytes(
@@ -250,6 +285,7 @@ class AndroidBleSession(
         characteristic: BluetoothGattCharacteristic,
         bytes: ByteArray,
         events: SendChannel<BleEvent>,
+        queue: GattOperationQueue,
     ): Boolean {
         AppLog.d("queue write ${bytes.toHexString()} to ${characteristic.uuid}", TAG)
         events.trySend(BleEvent.WriteQueued(bytes.copyOf()))
@@ -266,14 +302,15 @@ class AndroidBleSession(
     private fun BluetoothDevice.connectLeGatt(
         context: Context,
         callback: BluetoothGattCallback,
+        autoConnect: Boolean,
     ): BluetoothGatt? = if (Build.VERSION.SDK_INT >= 37) {
         val settings = BluetoothGattConnectionSettings.Builder()
-            .setAutoConnectEnabled(false)
+            .setAutoConnectEnabled(autoConnect)
             .setTransport(BluetoothDevice.TRANSPORT_LE)
             .build()
         connectGatt(settings, ContextCompat.getMainExecutor(context), callback)
     } else {
-        connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+        connectGatt(context, autoConnect, callback, BluetoothDevice.TRANSPORT_LE)
     }
 
     @SuppressLint("MissingPermission")
@@ -326,18 +363,20 @@ class AndroidBleSession(
     }
 
     @SuppressLint("MissingPermission")
-    private fun disconnectGatt(gatt: BluetoothGatt) {
-        queue.clear()
+    private fun disconnectGatt(gatt: BluetoothGatt, queue: GattOperationQueue?) {
+        queue?.clear()
         runCatching { gatt.disconnect() }
         runCatching { gatt.close() }
     }
 
-    private fun clearActiveSession() {
+    /** Only clears state that still belongs to [gatt]; a stale session must not wipe a newer one. */
+    private fun clearActiveSession(gatt: BluetoothGatt) {
+        if (activeGatt !== gatt) return
         activeGatt = null
         activeScope = null
         activeEvents = null
+        activeQueue = null
         activeWriteCharacteristic = null
-        queue.clear()
     }
 
     private fun List<BluetoothGattService>.toServiceInfo(): List<GattServiceInfo> =
@@ -361,8 +400,9 @@ class AndroidBleSession(
             hasClientConfigDescriptor = getDescriptor(CLIENT_CONFIG_DESCRIPTOR_UUID) != null,
         )
 
-    private companion object {
-        const val TAG = "KMF-BLE"
+    companion object {
+        const val BLUETOOTH_OFF_MESSAGE = "Bluetooth is off"
+        private const val TAG = "KMF-BLE"
         private val CLIENT_CONFIG_DESCRIPTOR_UUID: UUID =
             UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     }

@@ -21,7 +21,8 @@ interface BleRepositoryContract {
 
     fun stopScan()
 
-    fun connect(device: ScannedDevice, preferred: DeviceSnapshot?)
+    /** See [BleSession.connect] for [autoConnect]. */
+    fun connect(device: ScannedDevice, preferred: DeviceSnapshot?, autoConnect: Boolean = false)
 
     fun write(bytes: ByteArray): Boolean
 
@@ -68,13 +69,13 @@ class BleRepository(
         scanJob = null
     }
 
-    override fun connect(device: ScannedDevice, preferred: DeviceSnapshot?) {
-        AppLog.d("connect(device=$device, preferred=${preferred?.serviceUuid ?: "none"})", "KMF-BLE")
+    override fun connect(device: ScannedDevice, preferred: DeviceSnapshot?, autoConnect: Boolean) {
+        AppLog.d("connect(device=$device, preferred=${preferred?.serviceUuid ?: "none"}, autoConnect=$autoConnect)", "KMF-BLE")
         stopScan()
         connectionJob?.cancel()
         mutableEvents.tryEmit(BleEvent.Connecting(device))
         connectionJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            session.connect(device, preferred)
+            session.connect(device, preferred, autoConnect)
                 .catch { error ->
                     AppLog.e("connect flow failed", error, "KMF-BLE")
                     mutableEvents.emit(BleEvent.Error("BLE connection failed", error))
