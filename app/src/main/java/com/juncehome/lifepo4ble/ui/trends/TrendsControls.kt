@@ -16,8 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -40,11 +38,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -62,14 +65,44 @@ import com.juncehome.lifepo4ble.ui.theme.KmfTheme
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZoneOffset
+import kotlin.math.roundToInt
 
 private const val TAG = "KMF-BLE"
 
-/** Horizontally scrollable preset chips, edge to edge inside the padded screen column. */
+/**
+ * Horizontally scrollable preset chips, edge to edge inside the padded screen column.
+ *
+ * The selected chip is scrolled into view by this row's own [ScrollState] only. A
+ * BringIntoViewRequester would also scroll the screen's vertical scroll, and because the effect
+ * re-runs whenever the tab is recomposed, returning to Trends jumped the page up to this row.
+ */
 @Composable
 internal fun RangeChips(selected: TrendsRange, onSelect: (TrendsRange) -> Unit) {
     val scroll = rememberScrollState()
     val bleed = KmfDimens.ScreenPadding
+    val density = LocalDensity.current
+    // Plain holder, not snapshot state: placement callbacks must not trigger recomposition.
+    val placed = remember { PlacedChips() }
+    LaunchedEffect(selected) {
+        // Wait one frame so the chips have been placed for the current selection.
+        withFrameNanos { }
+        val viewport = placed.viewport ?: return@LaunchedEffect
+        val chip = placed.chips[selected] ?: return@LaunchedEffect
+        if (!viewport.isAttached || !chip.isAttached) return@LaunchedEffect
+        val marginPx = with(density) { bleed.toPx() }
+        val left = viewport.localPositionOf(chip, Offset.Zero).x
+        val right = left + chip.size.width
+        val delta = when {
+            left < marginPx -> left - marginPx
+            right > viewport.size.width - marginPx -> right - (viewport.size.width - marginPx)
+            else -> 0f
+        }
+        if (delta != 0f) {
+            val target = (scroll.value + delta).roundToInt().coerceIn(0, scroll.maxValue)
+            AppLog.d("Trends: range chips scrolled to ${selected.label} ${scroll.value} -> $target", TAG)
+            scroll.animateScrollTo(target)
+        }
+    }
     Row(
         modifier = Modifier
             .layout { measurable, constraints ->
@@ -81,6 +114,7 @@ internal fun RangeChips(selected: TrendsRange, onSelect: (TrendsRange) -> Unit) 
                 val placeable = measurable.measure(widened)
                 layout(constraints.maxWidth, placeable.height) { placeable.placeRelative(-bleed.roundToPx(), 0) }
             }
+            .onPlaced { placed.viewport = it }
             .horizontalScroll(scroll)
             .padding(horizontal = bleed)
             .semantics { contentDescription = "Time range" },
@@ -92,22 +126,35 @@ internal fun RangeChips(selected: TrendsRange, onSelect: (TrendsRange) -> Unit) 
                 range.startsGroup -> 12.dp
                 else -> 6.dp
             }
-            RangeChip(range, range == selected, Modifier.padding(start = gap), onSelect)
+            RangeChip(
+                range = range,
+                selected = range == selected,
+                modifier = Modifier.padding(start = gap),
+                onPlaced = { placed.chips[range] = it },
+                onSelect = onSelect,
+            )
         }
     }
 }
 
+private class PlacedChips {
+    var viewport: LayoutCoordinates? = null
+    val chips = HashMap<TrendsRange, LayoutCoordinates>()
+}
+
 @Composable
-private fun RangeChip(range: TrendsRange, selected: Boolean, modifier: Modifier, onSelect: (TrendsRange) -> Unit) {
+private fun RangeChip(
+    range: TrendsRange,
+    selected: Boolean,
+    modifier: Modifier,
+    onPlaced: (LayoutCoordinates) -> Unit,
+    onSelect: (TrendsRange) -> Unit,
+) {
     val colors = KmfTheme.colors
     val shape = RoundedCornerShape(12.dp)
-    val requester = remember { BringIntoViewRequester() }
-    LaunchedEffect(selected) {
-        if (selected) requester.bringIntoView()
-    }
     Row(
         modifier = modifier
-            .bringIntoViewRequester(requester)
+            .onPlaced(onPlaced)
             .height(40.dp)
             .widthIn(min = 48.dp)
             .background(if (selected) colors.surface2 else Color.Transparent, shape)
