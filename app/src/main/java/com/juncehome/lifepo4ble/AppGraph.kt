@@ -24,6 +24,7 @@ import com.juncehome.lifepo4ble.data.DeviceStore
 import com.juncehome.lifepo4ble.data.KmfDatabase
 import com.juncehome.lifepo4ble.data.KmfBatteryHistoryExporter
 import com.juncehome.lifepo4ble.data.KmfHistoryRepository
+import com.juncehome.lifepo4ble.data.KmfHistoryStore
 import com.juncehome.lifepo4ble.data.KmfTrendsRepository
 import com.juncehome.lifepo4ble.ui.trends.TrendsViewModel
 import com.juncehome.lifepo4ble.platform.BlePermissionPolicy
@@ -98,6 +99,8 @@ class AppGraph(
     private val repository by lazy {
         BleRepository(scanner, session)
     }
+
+    val historyStore: KmfHistoryStore get() = historyRepository
 
     fun createCollectionController(scope: CoroutineScope): CollectionController = CollectionControllerImpl(
         repository = repository,
