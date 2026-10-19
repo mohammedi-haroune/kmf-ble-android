@@ -15,6 +15,7 @@ import com.juncehome.lifepo4ble.protocol.KmfReading
 import com.juncehome.lifepo4ble.protocol.KmfReadingMerger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -134,7 +135,9 @@ class CollectionControllerImpl(
     private var watchdogJob: Job? = null
     private var livenessJob: Job? = null
 
-    private val eventJob = workScope.launch {
+    // UNDISPATCHED: the service scope runs on Main, so a lazily started collector would miss the
+    // Connecting event that start() emits synchronously (the shared flow has no replay).
+    private val eventJob = workScope.launch(start = CoroutineStart.UNDISPATCHED) {
         repository.events.collect(::handleEvent)
     }
 
@@ -278,6 +281,8 @@ class CollectionControllerImpl(
             is BleEvent.ServicesDiscovered -> {
                 linkUp = true
                 resetProtocolSession()
+                // Connecting can be missed; stale A/B/C flags would save samples built from zeros.
+                persistHistoryReset(activeConfiguration.snapshot.address)
                 profile = event.profile
                 updateState(CollectionPhase.BOOTSTRAPPING)
                 armWatchdog(SETUP_TIMEOUT_MS, "Meter did not start streaming")
