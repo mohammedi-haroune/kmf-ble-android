@@ -95,7 +95,8 @@ interface KmfBatterySampleDao {
             AVG(powerW) AS avgPowerW, MIN(powerW) AS minPowerW, MAX(powerW) AS maxPowerW,
             AVG(socPercent) AS avgSocPercent, MIN(socPercent) AS minSocPercent, MAX(socPercent) AS maxSocPercent,
             AVG(voltageV) AS avgVoltageV, MIN(voltageV) AS minVoltageV, MAX(voltageV) AS maxVoltageV,
-            AVG(currentA) AS avgCurrentA, MIN(currentA) AS minCurrentA, MAX(currentA) AS maxCurrentA
+            AVG(currentA) AS avgCurrentA, MIN(currentA) AS minCurrentA, MAX(currentA) AS maxCurrentA,
+            AVG(remainingAh) AS avgRemainingAh, MIN(remainingAh) AS minRemainingAh, MAX(remainingAh) AS maxRemainingAh
         FROM kmf_battery_sample
         WHERE timestampMs >= :fromMs AND timestampMs <= :toMs
         GROUP BY bucket
@@ -154,6 +155,9 @@ data class KmfSampleBucketRow(
     val avgCurrentA: Double,
     val minCurrentA: Double,
     val maxCurrentA: Double,
+    val avgRemainingAh: Double = 0.0,
+    val minRemainingAh: Double = 0.0,
+    val maxRemainingAh: Double = 0.0,
 )
 
 /** Cumulative counters at one edge (first or last sample) of a bucket. */

@@ -42,6 +42,16 @@ class TrendsViewModel(
     private val _range = MutableStateFlow(TrendsRange.Day)
     val range: StateFlow<TrendsRange> = _range.asStateFlow()
 
+    private val _offset = MutableStateFlow(0)
+
+    /** Whole windows the chart is shifted back from now (0 = ends now). */
+    val offset: StateFlow<Int> = _offset.asStateFlow()
+
+    private val _custom = MutableStateFlow<TrendsCustomRange?>(null)
+
+    /** Applied custom range, or null until Custom was first selected. */
+    val custom: StateFlow<TrendsCustomRange?> = _custom.asStateFlow()
+
     private val _metric = MutableStateFlow(TrendsMetric.Power)
     val metric: StateFlow<TrendsMetric> = _metric.asStateFlow()
 
@@ -56,6 +66,14 @@ class TrendsViewModel(
 
     private val manualReload = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
+    @Volatile
+    private var forceReload = false
+
+    private fun requestReload() {
+        forceReload = true
+        manualReload.tryEmit(Unit)
+    }
+
     init {
         AppLog.d("Trends: view model created refreshMs=$refreshMs", TAG)
         workScope.launch {
@@ -66,16 +84,83 @@ class TrendsViewModel(
                 }
             }
             val triggers = merge(store.observeChanges().map { }, ticker, manualReload)
-            combine(_range, triggers) { range, _ -> range }.collectLatest { load(it) }
+            var lastKey: Triple<TrendsRange, Int, TrendsCustomRange?>? = null
+            combine(_range, _offset, _custom, triggers) { range, offset, custom, _ -> Triple(range, offset, custom) }
+                .collectLatest { key ->
+                    val (range, offset, custom) = key
+                    // A past window (stepped back or custom) has no new samples to show; reload it only
+                    // when the selection changes or a manual reload (export/clear) asks for it.
+                    val historical = offset > 0 || range == TrendsRange.Custom
+                    if (historical && key == lastKey && !forceReload && _data.value != null) return@collectLatest
+                    forceReload = false
+                    lastKey = key
+                    load(range, offset, custom)
+                }
         }
         workScope.launch { refreshLastExport() }
     }
 
+    /** Selecting a preset always resets the window to end now; tapping the active preset while shifted does too. */
     fun selectRange(range: TrendsRange) {
-        if (_range.value == range) return
-        AppLog.d("Trends: range ${_range.value.label} -> ${range.label}", TAG)
+        if (_range.value == range && _offset.value == 0) return
+        AppLog.d("Trends: range ${_range.value.label} -> ${range.label} offset=${_offset.value} -> 0", TAG)
         _data.value = null
+        if (range == TrendsRange.Custom && _custom.value == null) {
+            _custom.value = TrendsCustomRanges.default(clock())
+            AppLog.d("Trends: custom range defaulted to last 2 d", TAG)
+        }
+        _offset.value = 0
         _range.value = range
+    }
+
+    /** Shifts the window back by one window length. Ignored for Live and Custom. */
+    fun stepEarlier() {
+        val range = _range.value
+        if (range == TrendsRange.Live || range == TrendsRange.Custom) {
+            AppLog.d("Trends: earlier ignored for ${range.label}", TAG)
+            return
+        }
+        val earliest = _data.value?.summary?.earliestMs
+        val window = _data.value?.window
+        if (earliest == null || (window != null && window.startMs <= earliest)) {
+            AppLog.d("Trends: earlier ignored, no older history earliest=$earliest", TAG)
+            return
+        }
+        _data.value = null
+        _offset.value += 1
+        AppLog.d("Trends: window earlier offset=${_offset.value} range=${range.label}", TAG)
+    }
+
+    /** Shifts the window forward by one window length; stops at now. */
+    fun stepLater() {
+        if (_range.value == TrendsRange.Live || _range.value == TrendsRange.Custom || _offset.value <= 0) {
+            AppLog.d("Trends: later ignored range=${_range.value.label} offset=${_offset.value}", TAG)
+            return
+        }
+        _data.value = null
+        _offset.value -= 1
+        AppLog.d("Trends: window later offset=${_offset.value} range=${_range.value.label}", TAG)
+    }
+
+    /** Applies a validated custom range and switches to Custom. Returns the validation error, if any. */
+    fun applyCustom(fromMs: Long, toMs: Long): TrendsCustomError? {
+        val error = TrendsCustomRanges.validate(fromMs, toMs, clock())
+        if (error != null) {
+            AppLog.d("Trends: custom range rejected from=$fromMs to=$toMs reason=$error", TAG)
+            return error
+        }
+        val next = TrendsCustomRange(fromMs, toMs)
+        if (_range.value == TrendsRange.Custom && _custom.value == next && _offset.value == 0) {
+            // Same window is already loaded; clearing data here would leave "Loading" with no reload.
+            AppLog.d("Trends: custom range unchanged from=$fromMs to=$toMs, keeping loaded data", TAG)
+            return null
+        }
+        AppLog.d("Trends: custom range applied from=$fromMs to=$toMs spanMs=${toMs - fromMs}", TAG)
+        _data.value = null
+        _offset.value = 0
+        _custom.value = TrendsCustomRange(fromMs, toMs)
+        _range.value = TrendsRange.Custom
+        return null
     }
 
     fun selectMetric(metric: TrendsMetric) {
@@ -114,7 +199,7 @@ class TrendsViewModel(
                 _exportStatus.value = TrendsExportStatus.Cleared
                 AppLog.d("Trends: saved history cleared", TAG)
                 refreshLastExport()
-                manualReload.tryEmit(Unit)
+                requestReload()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -134,28 +219,31 @@ class TrendsViewModel(
         }
     }
 
-    private suspend fun load(range: TrendsRange) {
+    private suspend fun load(range: TrendsRange, offset: Int, custom: TrendsCustomRange?) {
         val now = clock()
         val started = System.nanoTime()
         try {
-            val buckets = store.readBuckets(now - range.windowMs, now, range.bucketMs)
-            val latest = store.readLatest(0L, now)
+            val window = TrendsWindows.resolve(range, offset, custom, now)
+            val layout = TrendsEnergySlots.layout(window, zone)
+            val buckets = store.readBuckets(window.startMs, window.endMs, window.bucketMs)
+            val latest = store.readLatest(0L, window.endMs)
             val counters = store.readCounterBuckets(
-                TrendsEnergySlots.energyReadStartMs(range, now, zone),
-                now,
-                TrendsEnergyMath.FINE_BUCKET_MS,
+                TrendsEnergySlots.energyReadStartMs(layout, window.startMs),
+                window.endMs,
+                layout.fineMs,
             )
             val summary = store.readSummary()
-            _data.value = TrendsData(now, buckets, latest, counters, summary)
+            _data.value = TrendsData(now, buckets, latest, counters, summary, window)
             AppLog.d(
-                "Trends: loaded range=${range.label} buckets=${buckets.size} counterBuckets=${counters.size} " +
-                    "count=${summary.count} in ${(System.nanoTime() - started) / 1_000_000} ms",
+                "Trends: loaded range=${range.label} offset=$offset window=${window.startMs}..${window.endMs} " +
+                    "bucketMs=${window.bucketMs} buckets=${buckets.size} counterBuckets=${counters.size} " +
+                    "slots=${layout.starts.size} count=${summary.count} in ${(System.nanoTime() - started) / 1_000_000} ms",
                 TAG,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            AppLog.e("Trends: load failed range=${range.label}", error, TAG)
+            AppLog.e("Trends: load failed range=${range.label} offset=$offset", error, TAG)
         }
     }
 

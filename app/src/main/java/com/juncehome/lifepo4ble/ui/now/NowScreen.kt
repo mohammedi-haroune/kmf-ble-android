@@ -49,6 +49,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.layout.LastBaseline
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -75,7 +76,8 @@ import com.juncehome.lifepo4ble.ui.BleUiState
 import com.juncehome.lifepo4ble.ui.components.Banner
 import com.juncehome.lifepo4ble.ui.components.BannerTone
 import com.juncehome.lifepo4ble.ui.components.KmfIcons
-import com.juncehome.lifepo4ble.ui.components.StatusPill
+import com.juncehome.lifepo4ble.ui.components.ConnectionPill
+import com.juncehome.lifepo4ble.ui.components.accent
 import com.juncehome.lifepo4ble.ui.components.TrendChart
 import com.juncehome.lifepo4ble.ui.components.TrendChartColorMode
 import com.juncehome.lifepo4ble.ui.components.TrendChartMath
@@ -90,6 +92,16 @@ import java.time.ZoneId
 import kotlinx.coroutines.delay
 
 private const val TAG = "KMF-BLE"
+
+/** Pulls the SoC section up so the header-to-SoC gap is about 2 dp instead of the full section gap. */
+private val HEADER_GAP_TRIM = 14.dp
+
+/** Reports [amount] less height and places the content that much higher (it overlaps the gap above). */
+private fun Modifier.pullUp(amount: Dp): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints)
+    val pull = amount.roundToPx().coerceAtMost(placeable.height)
+    layout(placeable.width, placeable.height - pull) { placeable.place(0, -pull) }
+}
 
 /** Data link tick colors from the Now board that are not general theme tokens. */
 private val LinkReceivedDim = Color(0xFF2E5E4A)
@@ -176,6 +188,9 @@ fun NowScreen(
             verticalArrangement = Arrangement.spacedBy(KmfDimens.SectionGap),
         ) {
             NowHeader(model.meterName, model.pill, onOpenDevice, onPillAction = onBannerAction)
+            // Design: 44 dp header with -14 dp bottom margin inside the 16 dp gap, leaving ~2 dp.
+            // The first block under the header is pulled up; the header keeps its full touch height.
+            val pullUp = Modifier.pullUp(HEADER_GAP_TRIM)
             model.banner?.let { banner ->
                 Banner(
                     title = banner.title,
@@ -184,9 +199,10 @@ fun NowScreen(
                     icon = if (banner.tone == BannerTone.Error) KmfIcons.Warning else KmfIcons.BluetoothOff,
                     actionLabel = banner.action?.label,
                     onAction = banner.action?.let { action -> { onBannerAction(action) } },
+                    modifier = pullUp,
                 )
             }
-            SocSection(model)
+            SocSection(model, modifier = if (model.banner == null) pullUp else Modifier)
             FlowCard(model.flow)
             PowerChartCard(model.chart, onOpenTrends = onOpenTrends, modifier = Modifier.weight(1f))
             DataLinkCard(model.dataLink)
@@ -196,28 +212,16 @@ fun NowScreen(
 }
 
 @Composable
-private fun NowTone.accent(): KmfAccent {
-    val colors = KmfTheme.colors
-    return when (this) {
-        NowTone.Charge -> colors.charge
-        NowTone.Discharge -> colors.discharge
-        NowTone.Live -> colors.live
-        NowTone.Error -> colors.error
-        NowTone.Neutral -> colors.neutral
-        NowTone.Muted -> KmfAccent(colors.textTertiary)
-    }
-}
-
-@Composable
 private fun NowHeader(
     meterName: String,
     pill: NowPill,
     onOpenDevice: () -> Unit,
     onPillAction: (NowBannerAction) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val colors = KmfTheme.colors
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().height(KmfDimens.MinTouchTarget),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -247,30 +251,12 @@ private fun NowHeader(
                 )
             }
         }
-        val action = pill.action
-        StatusPill(
-            label = pill.label,
-            accent = pill.tone.accent(),
-            indicator = pill.indicator,
-            contentDescription = pill.contentDescription,
-            icon = when (pill.icon) {
-                NowPillIcon.Retry -> KmfIcons.Retry
-                NowPillIcon.Play -> KmfIcons.Play
-                NowPillIcon.None -> null
-            },
-            onClick = action?.let { a ->
-                {
-                    AppLog.d("Now: header pill tapped action=$a label='${pill.label}'", TAG)
-                    onPillAction(a)
-                }
-            },
-            onClickLabel = action?.label,
-        )
+        ConnectionPill(pill = pill, onAction = onPillAction, logSource = "Now header")
     }
 }
 
 @Composable
-private fun SocSection(model: NowScreenState) {
+private fun SocSection(model: NowScreenState, modifier: Modifier = Modifier) {
     val colors = KmfTheme.colors
     val numbers = KmfTheme.numbers
     val density = LocalDensity.current
@@ -285,7 +271,7 @@ private fun SocSection(model: NowScreenState) {
     val socColor = if (model.lowBattery) colors.error.onTint else colors.textPrimary
 
     Column(
-        modifier = Modifier.semantics(mergeDescendants = true) {
+        modifier = modifier.semantics(mergeDescendants = true) {
             contentDescription = "State of charge ${model.soc} percent, ${model.voltage} volts, " +
                 "${model.ahRemaining} of ${model.ahCapacity} amp hours"
         },
@@ -310,7 +296,7 @@ private fun SocSection(model: NowScreenState) {
                         withStyle(SpanStyle(color = colors.textPrimary)) { append(model.ahRemaining) }
                         append(" / ${model.ahCapacity} Ah")
                     },
-                    style = numbers.small,
+                    style = numbers.small.copy(fontSize = 15.sp, lineHeight = 20.sp),
                     color = colors.textSecondary,
                     maxLines = 1,
                 )

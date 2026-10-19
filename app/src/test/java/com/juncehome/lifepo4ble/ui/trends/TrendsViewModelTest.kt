@@ -30,6 +30,7 @@ class TrendsViewModelTest {
         val bucketCalls = mutableListOf<Triple<Long, Long, Long>>()
         var counterFrom = -1L
         var count = 7L
+        var earliest: Long? = null
 
         override fun observeChanges(): Flow<Long?> = changes
 
@@ -45,7 +46,7 @@ class TrendsViewModelTest {
             return emptyList()
         }
 
-        override suspend fun readSummary() = KmfHistorySummary(count, null)
+        override suspend fun readSummary() = KmfHistorySummary(count, earliest)
     }
 
     private class FakeExport : KmfBatteryHistoryExportStore {
@@ -177,5 +178,93 @@ class TrendsViewModelTest {
         assertEquals(TrendsExportStatus.Cleared, vm.exportStatus.value)
         assertTrue(store.bucketCalls.size > before)
         assertEquals(0L, vm.data.value!!.summary.count)
+    }
+
+    @Test
+    fun steppingMovesWindowBackAndForthAndResetsOnPreset() = runTest {
+        val store = FakeStore().apply { earliest = now - 10L * 86_400_000L }
+        val vm = model(store, FakeExport())
+        runCurrent()
+        vm.selectRange(TrendsRange.Hour6)
+        runCurrent()
+        val sixHours = 6 * 3_600_000L
+        assertEquals(now - sixHours, store.bucketCalls.last().first)
+
+        vm.stepEarlier()
+        runCurrent()
+        assertEquals(1, vm.offset.value)
+        assertEquals(now - 2 * sixHours to now - sixHours, store.bucketCalls.last().first to store.bucketCalls.last().second)
+        assertEquals(now - sixHours, vm.data.value!!.window!!.endMs)
+
+        vm.stepLater()
+        runCurrent()
+        assertEquals(0, vm.offset.value)
+        vm.stepLater() // already at now
+        assertEquals(0, vm.offset.value)
+
+        vm.stepEarlier()
+        runCurrent()
+        vm.selectRange(TrendsRange.Hour6) // re-tapping the active preset returns to now
+        runCurrent()
+        assertEquals(0, vm.offset.value)
+        assertEquals(now, store.bucketCalls.last().second)
+    }
+
+    @Test
+    fun steppingIsIgnoredForLiveCustomAndWithoutOlderHistory() = runTest {
+        val store = FakeStore()
+        val vm = model(store, FakeExport())
+        runCurrent()
+        vm.selectRange(TrendsRange.Live)
+        runCurrent()
+        vm.stepEarlier()
+        assertEquals(0, vm.offset.value)
+        vm.selectRange(TrendsRange.Hour2)
+        runCurrent()
+        vm.stepEarlier() // earliest unknown
+        assertEquals(0, vm.offset.value)
+        vm.selectRange(TrendsRange.Custom)
+        runCurrent()
+        vm.stepEarlier()
+        assertEquals(0, vm.offset.value)
+    }
+
+    @Test
+    fun customRangeDefaultsToTwoDaysAndAppliesOnlyWhenValid() = runTest {
+        val store = FakeStore()
+        val vm = model(store, FakeExport())
+        runCurrent()
+        vm.selectRange(TrendsRange.Custom)
+        runCurrent()
+        assertEquals(TrendsCustomRange(now - 2 * 86_400_000L, now), vm.custom.value)
+        assertEquals(now - 2 * 86_400_000L, store.bucketCalls.last().first)
+
+        assertEquals(TrendsCustomError.ToInFuture, vm.applyCustom(now - 1_000L, now + 5_000L))
+        assertEquals(TrendsCustomError.FromNotBeforeTo, vm.applyCustom(now, now))
+        assertEquals(TrendsCustomRange(now - 2 * 86_400_000L, now), vm.custom.value)
+
+        vm.selectRange(TrendsRange.Day)
+        runCurrent()
+        assertNull(vm.applyCustom(now - 3_600_000L, now - 1_800_000L))
+        runCurrent()
+        assertEquals(TrendsRange.Custom, vm.range.value)
+        val (from, to, bucket) = store.bucketCalls.last()
+        assertEquals(now - 3_600_000L, from)
+        assertEquals(now - 1_800_000L, to)
+        assertEquals(TrendsWindows.bucketForSpan(1_800_000L), bucket)
+    }
+
+    @Test
+    fun applyingSameCustomRangeTwiceKeepsChartLoaded() = runTest {
+        val store = FakeStore()
+        val vm = model(store, FakeExport())
+        runCurrent()
+        assertNull(vm.applyCustom(now - 3_600_000L, now - 1_800_000L))
+        runCurrent()
+        assertNotNull(vm.data.value)
+
+        assertNull(vm.applyCustom(now - 3_600_000L, now - 1_800_000L))
+        runCurrent()
+        assertNotNull(vm.data.value)
     }
 }
