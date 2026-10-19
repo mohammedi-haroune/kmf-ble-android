@@ -49,7 +49,6 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.layout.LastBaseline
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -77,6 +76,7 @@ import com.juncehome.lifepo4ble.ui.components.Banner
 import com.juncehome.lifepo4ble.ui.components.BannerTone
 import com.juncehome.lifepo4ble.ui.components.KmfIcons
 import com.juncehome.lifepo4ble.ui.components.ConnectionPill
+import com.juncehome.lifepo4ble.ui.components.screenHeader
 import com.juncehome.lifepo4ble.ui.components.accent
 import com.juncehome.lifepo4ble.ui.components.TrendChart
 import com.juncehome.lifepo4ble.ui.components.TrendChartColorMode
@@ -92,16 +92,6 @@ import java.time.ZoneId
 import kotlinx.coroutines.delay
 
 private const val TAG = "KMF-BLE"
-
-/** Pulls the SoC section up so the header-to-SoC gap is about 2 dp instead of the full section gap. */
-private val HEADER_GAP_TRIM = 14.dp
-
-/** Reports [amount] less height and places the content that much higher (it overlaps the gap above). */
-private fun Modifier.pullUp(amount: Dp): Modifier = layout { measurable, constraints ->
-    val placeable = measurable.measure(constraints)
-    val pull = amount.roundToPx().coerceAtMost(placeable.height)
-    layout(placeable.width, placeable.height - pull) { placeable.place(0, -pull) }
-}
 
 /** Data link tick colors from the Now board that are not general theme tokens. */
 private val LinkReceivedDim = Color(0xFF2E5E4A)
@@ -184,13 +174,10 @@ fun NowScreen(
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
                 .heightIn(min = viewportHeight)
-                .padding(start = KmfDimens.ScreenPadding, end = KmfDimens.ScreenPadding, top = 20.dp, bottom = 16.dp),
+                .padding(start = KmfDimens.ScreenPadding, end = KmfDimens.ScreenPadding, top = KmfDimens.ScreenPadding, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(KmfDimens.SectionGap),
         ) {
             NowHeader(model.meterName, model.pill, onOpenDevice, onPillAction = onBannerAction)
-            // Design: 44 dp header with -14 dp bottom margin inside the 16 dp gap, leaving ~2 dp.
-            // The first block under the header is pulled up; the header keeps its full touch height.
-            val pullUp = Modifier.pullUp(HEADER_GAP_TRIM)
             model.banner?.let { banner ->
                 Banner(
                     title = banner.title,
@@ -199,10 +186,9 @@ fun NowScreen(
                     icon = if (banner.tone == BannerTone.Error) KmfIcons.Warning else KmfIcons.BluetoothOff,
                     actionLabel = banner.action?.label,
                     onAction = banner.action?.let { action -> { onBannerAction(action) } },
-                    modifier = pullUp,
                 )
             }
-            SocSection(model, modifier = if (model.banner == null) pullUp else Modifier)
+            SocSection(model)
             FlowCard(model.flow)
             PowerChartCard(model.chart, onOpenTrends = onOpenTrends, modifier = Modifier.weight(1f))
             DataLinkCard(model.dataLink)
@@ -221,7 +207,7 @@ private fun NowHeader(
 ) {
     val colors = KmfTheme.colors
     Row(
-        modifier = modifier.fillMaxWidth().height(KmfDimens.MinTouchTarget),
+        modifier = modifier.screenHeader(),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
