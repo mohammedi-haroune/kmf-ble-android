@@ -42,7 +42,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -71,6 +70,7 @@ import com.juncehome.lifepo4ble.ui.components.SectionCard
 import com.juncehome.lifepo4ble.ui.components.TrendChart
 import com.juncehome.lifepo4ble.ui.components.ValueWithUnit
 import com.juncehome.lifepo4ble.ui.components.rememberTrendChartAxisInset
+import com.juncehome.lifepo4ble.ui.components.screenHeader
 import com.juncehome.lifepo4ble.ui.theme.KmfBleTheme
 import com.juncehome.lifepo4ble.ui.theme.KmfDimens
 import com.juncehome.lifepo4ble.ui.theme.KmfTheme
@@ -229,19 +229,12 @@ fun TrendsScreen(
     }
 }
 
-/** Title row; its bottom spacing is 8 dp tighter than the section gap. */
+/** Title row with the shared header geometry (see [screenHeader]). */
 @Composable
 private fun TrendsHeader(trailing: @Composable () -> Unit) {
     val colors = KmfTheme.colors
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(44.dp)
-            .layout { measurable, constraints ->
-                val placeable = measurable.measure(constraints)
-                val trim = 8.dp.roundToPx().coerceAtMost(placeable.height)
-                layout(placeable.width, placeable.height - trim) { placeable.placeRelative(0, 0) }
-            },
+        modifier = Modifier.screenHeader(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {

@@ -70,6 +70,7 @@ import com.juncehome.lifepo4ble.protocol.PacketFormatter
 import com.juncehome.lifepo4ble.ui.BleUiState
 import com.juncehome.lifepo4ble.ui.ConnectionState
 import com.juncehome.lifepo4ble.ui.components.ConnectionPill
+import com.juncehome.lifepo4ble.ui.components.screenHeader
 import com.juncehome.lifepo4ble.ui.components.KmfIcons
 import com.juncehome.lifepo4ble.ui.components.KmfLightButton
 import com.juncehome.lifepo4ble.ui.components.SectionCard
@@ -148,7 +149,7 @@ fun DeviceScreen(
         verticalArrangement = Arrangement.spacedBy(KmfDimens.SectionGap),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().height(KmfDimens.MinTouchTarget),
+            modifier = Modifier.screenHeader(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
