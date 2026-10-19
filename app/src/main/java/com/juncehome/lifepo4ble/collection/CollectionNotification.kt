@@ -9,6 +9,7 @@ import android.content.Intent
 import android.graphics.drawable.Icon
 import android.os.Build
 import com.juncehome.lifepo4ble.MainActivity
+import com.juncehome.lifepo4ble.R
 
 object CollectionNotification {
     const val CHANNEL_ID = "battery_collection"
@@ -31,7 +32,7 @@ object CollectionNotification {
         context,
         CHANNEL_ID,
     )
-        .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+        .setSmallIcon(R.drawable.ic_stat_cell_watch)
         .setContentTitle("KMF battery collection")
         .setContentText(statusText(state))
         .setCategory(Notification.CATEGORY_SERVICE)

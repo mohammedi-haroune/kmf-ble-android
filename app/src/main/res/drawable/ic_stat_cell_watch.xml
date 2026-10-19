@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cell Watch status-bar / notification small icon: logo geometry cropped to 22..86, slightly heavier strokes for legibility at 24dp. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <group
+        android:translateX="-22"
+        android:translateY="-22">
+        <path
+            android:strokeColor="#73FFFFFF"
+            android:strokeWidth="9"
+            android:fillColor="#00000000"
+            android:pathData="M54,27A27,27 0 1 1 54,81A27,27 0 1 1 54,27Z" />
+        <path
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="9"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000"
+            android:trimPathEnd="0.75"
+            android:pathData="M54,27A27,27 0 1 1 54,81A27,27 0 1 1 54,27" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M57,38L45,56H53L50,71L63,51H55Z" />
+    </group>
+</vector>
