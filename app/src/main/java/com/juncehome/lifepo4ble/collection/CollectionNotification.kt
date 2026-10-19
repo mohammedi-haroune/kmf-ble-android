@@ -9,6 +9,7 @@ import android.content.Intent
 import android.graphics.drawable.Icon
 import android.os.Build
 import com.juncehome.lifepo4ble.MainActivity
+import com.juncehome.lifepo4ble.R
 
 object CollectionNotification {
     const val CHANNEL_ID = "battery_collection"
@@ -27,24 +28,31 @@ object CollectionNotification {
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-    fun build(context: Context, state: CollectionState): Notification = Notification.Builder(
-        context,
-        CHANNEL_ID,
-    )
-        .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-        .setContentTitle("KMF battery collection")
-        .setContentText(statusText(state))
-        .setCategory(Notification.CATEGORY_SERVICE)
-        .setOngoing(true)
-        .setContentIntent(appPendingIntent(context))
-        .addAction(
-            Notification.Action.Builder(
-                Icon.createWithResource(context, android.R.drawable.ic_media_pause),
-                "Stop",
-                stopPendingIntent(context),
-            ).build(),
-        )
-        .build()
+    fun build(
+        context: Context,
+        state: CollectionState,
+        reading: NotificationReading? = null,
+    ): Notification {
+        val content = CollectionNotificationContent.from(state, reading, System.currentTimeMillis())
+        return Notification.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_stat_cell_watch)
+            .setContentTitle(content.title)
+            .setContentText(content.text)
+            .setShowWhen(content.whenMs != null)
+            .setWhen(content.whenMs ?: System.currentTimeMillis())
+            .setOnlyAlertOnce(true)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .setOngoing(true)
+            .setContentIntent(appPendingIntent(context))
+            .addAction(
+                Notification.Action.Builder(
+                    Icon.createWithResource(context, android.R.drawable.ic_media_pause),
+                    "Stop",
+                    stopPendingIntent(context),
+                ).build(),
+            )
+            .build()
+    }
 
     private fun appPendingIntent(context: Context): PendingIntent = PendingIntent.getActivity(
         context,
@@ -59,16 +67,6 @@ object CollectionNotification {
         Intent(context, BatteryCollectionService::class.java).setAction(CollectionServiceAction.STOP),
         PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE,
     )
-
-    private fun statusText(state: CollectionState): String = when (state.phase) {
-        CollectionPhase.COLLECTING -> "Collecting battery data"
-        CollectionPhase.CONNECTING,
-        CollectionPhase.BOOTSTRAPPING -> "Connecting to meter"
-        CollectionPhase.WAITING_FOR_DEVICE -> "Meter is out of range"
-        CollectionPhase.BLUETOOTH_OFF -> "Bluetooth is off; collection resumes when it is back on"
-        CollectionPhase.ERROR -> "Collection paused: ${state.error ?: "connection error"}"
-        CollectionPhase.STOPPED -> "Collection stopped"
-    }
 
     private const val APP_PENDING_INTENT_REQUEST_CODE = 4101
     private const val STOP_PENDING_INTENT_REQUEST_CODE = 4102

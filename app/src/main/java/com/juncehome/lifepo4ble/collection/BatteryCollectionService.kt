@@ -6,13 +6,22 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import com.juncehome.lifepo4ble.AppLog
 import com.juncehome.lifepo4ble.BleApplication
 import com.juncehome.lifepo4ble.platform.BluetoothAdapterStateObserver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -86,7 +95,11 @@ class BatteryCollectionService : Service() {
     private lateinit var statusRelay: CollectionStatusRelay
     private lateinit var bluetoothStateObserver: BluetoothAdapterStateObserver
     private var startedConfiguration: CollectionConfiguration? = null
+    private var lastNotifiedPhase: CollectionPhase? = null
+    private var lastNotifiedAtMs = 0L
+    private var lastNotifiedReading: NotificationReading? = null
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     override fun onCreate() {
         super.onCreate()
         val graph = (application as BleApplication).graph
@@ -106,12 +119,33 @@ class BatteryCollectionService : Service() {
         )
         CollectionNotification.createChannel(this)
         serviceScope.launch {
-            controller.state.collect { state ->
-                statusRelay.publish(state)
-                getSystemService(android.app.NotificationManager::class.java).notify(
-                    CollectionNotification.NOTIFICATION_ID,
-                    CollectionNotification.build(this@BatteryCollectionService, state),
-                )
+            controller.state.collect { state -> statusRelay.publish(state) }
+        }
+        val historyStore = graph.historyStore
+        serviceScope.launch {
+            val latestReading = controller.state
+                .map { it.deviceAddress }
+                .distinctUntilChanged()
+                .flatMapLatest { address ->
+                    if (address == null) {
+                        flowOf(null)
+                    } else {
+                        historyStore.observeLatestBatterySample(address).map { sample ->
+                            sample?.let(NotificationReading::from)
+                        }
+                    }
+                }
+            combine(controller.state, latestReading, ::Pair).collectLatest { (state, reading) ->
+                // Phase changes post at once; reading-only updates at most every NOTIFICATION_MIN_INTERVAL_MS.
+                // collectLatest cancels a pending wait when a newer value arrives, so the last one always posts.
+                val waitMs = if (state.phase != lastNotifiedPhase) {
+                    0L
+                } else {
+                    (lastNotifiedAtMs + NOTIFICATION_MIN_INTERVAL_MS - SystemClock.elapsedRealtime())
+                        .coerceAtLeast(0L)
+                }
+                delay(waitMs)
+                postNotification(state, reading)
             }
         }
     }
@@ -166,8 +200,24 @@ class BatteryCollectionService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun postNotification(state: CollectionState, reading: NotificationReading?) {
+        val content = CollectionNotificationContent.from(state, reading, System.currentTimeMillis())
+        AppLog.d(
+            "collection notification phase=${state.phase} title=\"${content.title}\" text=\"${content.text}\" " +
+                "sampleAt=${reading?.timestampMs}",
+            TAG,
+        )
+        getSystemService(android.app.NotificationManager::class.java).notify(
+            CollectionNotification.NOTIFICATION_ID,
+            CollectionNotification.build(this, state, reading),
+        )
+        lastNotifiedPhase = state.phase
+        lastNotifiedAtMs = SystemClock.elapsedRealtime()
+        lastNotifiedReading = reading
+    }
+
     private fun promoteToForeground() {
-        val notification = CollectionNotification.build(this, controller.state.value)
+        val notification = CollectionNotification.build(this, controller.state.value, lastNotifiedReading)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 CollectionNotification.NOTIFICATION_ID,
@@ -181,5 +231,6 @@ class BatteryCollectionService : Service() {
 
     private companion object {
         const val TAG = "KMF-BLE"
+        const val NOTIFICATION_MIN_INTERVAL_MS = 5_000L
     }
 }
