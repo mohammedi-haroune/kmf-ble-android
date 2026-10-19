@@ -69,11 +69,15 @@ import com.juncehome.lifepo4ble.protocol.PacketDirection
 import com.juncehome.lifepo4ble.protocol.PacketFormatter
 import com.juncehome.lifepo4ble.ui.BleUiState
 import com.juncehome.lifepo4ble.ui.ConnectionState
+import com.juncehome.lifepo4ble.ui.components.ConnectionPill
 import com.juncehome.lifepo4ble.ui.components.KmfIcons
 import com.juncehome.lifepo4ble.ui.components.KmfLightButton
 import com.juncehome.lifepo4ble.ui.components.SectionCard
 import com.juncehome.lifepo4ble.ui.components.StatusDot
 import com.juncehome.lifepo4ble.ui.components.StatusPillIndicator
+import com.juncehome.lifepo4ble.ui.now.NowDisplayState
+import com.juncehome.lifepo4ble.ui.now.NowPill
+import com.juncehome.lifepo4ble.ui.now.NowScreenReducer
 import com.juncehome.lifepo4ble.ui.firstrun.FirstRunNotice
 import com.juncehome.lifepo4ble.ui.theme.KmfAccent
 import com.juncehome.lifepo4ble.ui.theme.KmfBleTheme
@@ -105,6 +109,7 @@ fun DeviceRoute(
     notice: FirstRunNotice?,
     contentPadding: PaddingValues,
     callbacks: DeviceCallbacks,
+    headerTrailing: @Composable () -> Unit = {},
 ) {
     val nowMs by produceState(initialValue = System.currentTimeMillis()) {
         while (true) {
@@ -122,7 +127,7 @@ fun DeviceRoute(
             TAG,
         )
     }
-    DeviceScreen(model = model, contentPadding = contentPadding, callbacks = callbacks)
+    DeviceScreen(model = model, contentPadding = contentPadding, callbacks = callbacks, headerTrailing = headerTrailing)
 }
 
 @Composable
@@ -130,6 +135,7 @@ fun DeviceScreen(
     model: DeviceScreenState,
     contentPadding: PaddingValues,
     callbacks: DeviceCallbacks,
+    headerTrailing: @Composable () -> Unit = {},
 ) {
     var confirmForget by rememberSaveable { mutableStateOf(false) }
     Column(
@@ -141,14 +147,19 @@ fun DeviceScreen(
             .padding(horizontal = KmfDimens.ScreenPadding, vertical = KmfDimens.ScreenPadding),
         verticalArrangement = Arrangement.spacedBy(KmfDimens.SectionGap),
     ) {
-        Text(
-            text = "Device",
-            style = MaterialTheme.typography.headlineSmall.copy(fontSize = 22.sp, lineHeight = 28.sp),
-            color = KmfTheme.colors.textPrimary,
-            modifier = Modifier
-                .heightIn(min = 36.dp)
-                .semantics { heading() },
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().height(KmfDimens.MinTouchTarget),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Device",
+                style = MaterialTheme.typography.headlineSmall.copy(fontSize = 22.sp, lineHeight = 28.sp),
+                color = KmfTheme.colors.textPrimary,
+                modifier = Modifier.semantics { heading() },
+            )
+            headerTrailing()
+        }
         CollectionCard(model.collection, callbacks)
         MeterCard(
             meter = model.meter,
@@ -706,7 +717,7 @@ private fun previewState(mode: DeviceMode): BleUiState {
 }
 
 @Composable
-private fun DevicePreview(mode: DeviceMode) {
+private fun DevicePreview(mode: DeviceMode, pill: NowPill? = null) {
     KmfBleTheme {
         DeviceScreen(
             model = DeviceScreenReducer.reduce(
@@ -717,21 +728,31 @@ private fun DevicePreview(mode: DeviceMode) {
             ),
             contentPadding = PaddingValues(0.dp),
             callbacks = DeviceCallbacks(),
+            headerTrailing = { if (pill != null) ConnectionPill(pill = pill, onAction = {}) },
         )
     }
 }
 
 @Preview(name = "Device - Collecting", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1180)
 @Composable
-private fun DeviceCollectingPreview() = DevicePreview(DeviceMode.Collecting)
+private fun DeviceCollectingPreview() = DevicePreview(
+    DeviceMode.Collecting,
+    NowScreenReducer.pill(NowDisplayState.Charging, frameAgeMs = 2_000L),
+)
 
 @Preview(name = "Device - Collection off", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1180)
 @Composable
-private fun DeviceOffPreview() = DevicePreview(DeviceMode.CollectionOff)
+private fun DeviceOffPreview() = DevicePreview(
+    DeviceMode.CollectionOff,
+    NowScreenReducer.pill(NowDisplayState.CollectionOff, frameAgeMs = null),
+)
 
 @Preview(name = "Device - Test running", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1180)
 @Composable
-private fun DeviceTestRunningPreview() = DevicePreview(DeviceMode.TestRunning)
+private fun DeviceTestRunningPreview() = DevicePreview(
+    DeviceMode.TestRunning,
+    NowScreenReducer.pill(NowDisplayState.Reconnecting, frameAgeMs = 40_000L),
+)
 
 @Preview(name = "Device - Not paired", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1180)
 @Composable

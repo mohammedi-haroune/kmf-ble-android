@@ -270,4 +270,91 @@ class TrendsScreenReducerTest {
         assertNull(reduce().statusLine)
         assertEquals(KmfBatteryHistoryExporter.ADB_PULL_COMMAND, reduce().adbCommand)
     }
+
+    @Test
+    fun capacityMetricUsesRemainingAhAndShowsCapacitySuffix() {
+        val latest = sample().copy(remainingAh = 164.0, capacityAh = 200.0)
+        val rows = listOf(
+            row(1, now - 2000).copy(avgRemainingAh = 160.0, minRemainingAh = 158.0, maxRemainingAh = 162.0),
+            row(2, now - 1000).copy(avgRemainingAh = 164.0, minRemainingAh = 163.0, maxRemainingAh = 165.0),
+        )
+        val state = reduce(metric = TrendsMetric.Capacity, data = data(buckets = rows, latest = latest))
+        assertEquals("164.0", state.nowValue)
+        assertEquals("/ 200 Ah", state.nowUnitText)
+        assertEquals("Capacity - latest", state.metricCaption)
+        assertEquals("158.0 Ah", state.minText)
+        assertEquals("165.0 Ah", state.maxText)
+        assertEquals(listOf(160.0, 164.0), state.points.map { it.value })
+        assertEquals("Ah", state.unit)
+        val fractional = reduce(metric = TrendsMetric.Capacity, data = data(latest = latest.copy(capacityAh = 100.5)))
+        assertEquals("/ 100.5 Ah", fractional.nowUnitText)
+        val unknown = reduce(metric = TrendsMetric.Capacity, data = data(latest = latest.copy(capacityAh = 0.0)))
+        assertEquals("Ah", unknown.nowUnitText)
+    }
+
+    @Test
+    fun metricCaptionsAndNames() {
+        assertEquals("Power - now", reduce(TrendsRange.Live).metricCaption)
+        assertEquals("State of charge - latest", reduce(metric = TrendsMetric.Soc).metricCaption)
+        assertEquals(
+            listOf("W", "%", "V", "A", "Ah"),
+            TrendsMetric.entries.map { it.unit },
+        )
+        assertEquals(
+            listOf("Power", "State of charge", "Voltage", "Current", "Capacity"),
+            TrendsMetric.entries.map { it.fullName },
+        )
+    }
+
+    @Test
+    fun yTicksAreNiceAndSpanTheRange() {
+        val rows = listOf(row(1, now - 2000, power = Triple(-80.0, -80.0, -80.0)), row(2, now - 1000, power = Triple(60.0, 60.0, 60.0)))
+        val state = reduce(data = data(buckets = rows))
+        assertEquals(listOf("50", "0", "50"), state.yTicks.map { it.label })
+        assertTrue(reduce(data = data()).yTicks.isEmpty())
+    }
+
+    @Test
+    fun stepperStateForShiftedWindows() {
+        val earliest = now - 30L * 86_400_000L
+        val base = data(count = 5, earliest = earliest)
+        val atNow = reduce(TrendsRange.Hour6, data = base)
+        assertEquals("Today 06:07 - 12:07", atNow.windowLabel)
+        assertTrue(atNow.canEarlier)
+        assertFalse(atNow.canLater)
+        val shifted = TrendsScreenReducer.reduce(
+            TrendsRange.Hour6, TrendsMetric.Power, base, null, TrendsExportStatus.Idle, null, zone, offset = 1,
+        )
+        assertEquals("Today 00:07 - 06:07", shifted.windowLabel)
+        assertTrue(shifted.canLater)
+        assertEquals("06:07", shifted.tickLabels.last())
+        assertEquals("6 h by 30 min", shifted.energy.title)
+        assertEquals("06:07", shifted.energy.toLabel)
+        val live = reduce(TrendsRange.Live, data = base)
+        assertFalse(live.canEarlier)
+        assertFalse(live.canLater)
+        assertEquals("Last 15 min", live.windowLabel)
+        val oldest = TrendsScreenReducer.reduce(
+            TrendsRange.Hour6, TrendsMetric.Power, data(count = 5, earliest = now - 3_600_000L), null,
+            TrendsExportStatus.Idle, null, zone,
+        )
+        assertFalse(oldest.canEarlier)
+        assertFalse(reduce(TrendsRange.Hour6, data = data()).canEarlier)
+    }
+
+    @Test
+    fun customRangeStateAndEnergyTitle() {
+        val custom = TrendsCustomRange(now - 3 * 3_600_000L, now - 3_600_000L)
+        val state = TrendsScreenReducer.reduce(
+            TrendsRange.Custom, TrendsMetric.Power, data(count = 1, earliest = now - 86_400_000L), null,
+            TrendsExportStatus.Idle, null, zone, custom = custom,
+        )
+        assertTrue(state.isCustom)
+        assertEquals(custom.fromMs, state.customFromMs)
+        assertEquals(custom.toMs, state.customToMs)
+        assertEquals("selected period by 15 min", state.energy.title)
+        assertFalse(state.canEarlier)
+        assertFalse(state.canLater)
+        assertEquals(now - 86_400_000L, state.earliestMs)
+    }
 }

@@ -45,6 +45,23 @@ object KmfIcons {
         lineIcon("ChevronRight", "M9 6l6 6 -6 6", strokeWidth = 2.4f)
     }
 
+    /** Window stepper: previous period. */
+    val ChevronLeft: ImageVector by lazy {
+        lineIcon("ChevronLeft", "M15 6l-6 6 6 6", strokeWidth = 2.4f)
+    }
+
+    /** Trends Custom range chip: calendar. */
+    val Calendar: ImageVector by lazy {
+        lineIcon(
+            "Calendar",
+            "M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2H5a2 2 0 0 1 -2 -2V7a2 2 0 0 1 2 -2z",
+            "M3 10h18",
+            "M8 3v4",
+            "M16 3v4",
+            strokeWidth = 1.8f,
+        )
+    }
+
     /** Warning triangle, e.g. low battery alert row and error banners. */
     val Warning: ImageVector by lazy {
         lineIcon("Warning", "M12 3l10 18H2z", "M12 10v4", "M12 17.5v0.5", strokeWidth = 2.2f)

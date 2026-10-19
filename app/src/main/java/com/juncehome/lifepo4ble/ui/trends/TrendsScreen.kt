@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -43,8 +42,10 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -57,6 +58,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -66,10 +68,9 @@ import com.juncehome.lifepo4ble.data.KmfHistorySummary
 import com.juncehome.lifepo4ble.data.KmfSampleBucketRow
 import com.juncehome.lifepo4ble.ui.components.KmfLightButton
 import com.juncehome.lifepo4ble.ui.components.SectionCard
-import com.juncehome.lifepo4ble.ui.components.StatusDot
-import com.juncehome.lifepo4ble.ui.components.StatusPillIndicator
 import com.juncehome.lifepo4ble.ui.components.TrendChart
 import com.juncehome.lifepo4ble.ui.components.ValueWithUnit
+import com.juncehome.lifepo4ble.ui.components.rememberTrendChartAxisInset
 import com.juncehome.lifepo4ble.ui.theme.KmfBleTheme
 import com.juncehome.lifepo4ble.ui.theme.KmfDimens
 import com.juncehome.lifepo4ble.ui.theme.KmfTheme
@@ -83,6 +84,10 @@ private const val TAG = "KMF-BLE"
 data class TrendsCallbacks(
     val onSelectRange: (TrendsRange) -> Unit = {},
     val onSelectMetric: (TrendsMetric) -> Unit = {},
+    val onStepEarlier: () -> Unit = {},
+    val onStepLater: () -> Unit = {},
+    /** Returns why the range was rejected, or null when applied. */
+    val onApplyCustom: (fromMs: Long, toMs: Long) -> TrendsCustomError? = { _, _ -> null },
     val onScrub: (Int) -> Unit = {},
     val onExport: () -> Unit = {},
     val onCopyAdb: () -> Unit = {},
@@ -91,17 +96,23 @@ data class TrendsCallbacks(
 
 /** Stateful entry: collects the ViewModel, holds the scrub position and reduces to screen state. */
 @Composable
-fun TrendsRoute(viewModel: TrendsViewModel, contentPadding: PaddingValues) {
+fun TrendsRoute(
+    viewModel: TrendsViewModel,
+    contentPadding: PaddingValues,
+    headerTrailing: @Composable () -> Unit = {},
+) {
     val range by viewModel.range.collectAsStateWithLifecycle()
+    val offset by viewModel.offset.collectAsStateWithLifecycle()
+    val custom by viewModel.custom.collectAsStateWithLifecycle()
     val metric by viewModel.metric.collectAsStateWithLifecycle()
     val data by viewModel.data.collectAsStateWithLifecycle()
     val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
     val lastExport by viewModel.lastExport.collectAsStateWithLifecycle()
     var scrubIndex by remember { mutableStateOf<Int?>(null) }
-    LaunchedEffect(range, metric) { scrubIndex = null }
+    LaunchedEffect(range, offset, custom, metric) { scrubIndex = null }
     val context = LocalContext.current
     val zone = remember { ZoneId.systemDefault() }
-    val state by remember(range, metric, data, lastExport, exportStatus, scrubIndex) {
+    val state by remember(range, offset, custom, metric, data, lastExport, exportStatus, scrubIndex) {
         derivedStateOf {
             TrendsScreenReducer.reduce(
                 range = range,
@@ -112,6 +123,8 @@ fun TrendsRoute(viewModel: TrendsViewModel, contentPadding: PaddingValues) {
                 scrubIndex = scrubIndex,
                 zone = zone,
                 nowMs = System.currentTimeMillis(),
+                offset = offset,
+                custom = custom,
             )
         }
     }
@@ -125,6 +138,15 @@ fun TrendsRoute(viewModel: TrendsViewModel, contentPadding: PaddingValues) {
                 AppLog.d("Trends: metric tapped ${it.label}", TAG)
                 viewModel.selectMetric(it)
             },
+            onStepEarlier = {
+                AppLog.d("Trends: earlier period tapped", TAG)
+                viewModel.stepEarlier()
+            },
+            onStepLater = {
+                AppLog.d("Trends: later period tapped", TAG)
+                viewModel.stepLater()
+            },
+            onApplyCustom = { from, to -> viewModel.applyCustom(from, to) },
             onScrub = { scrubIndex = it },
             onExport = {
                 AppLog.d("Trends: export tapped", TAG)
@@ -141,6 +163,8 @@ fun TrendsRoute(viewModel: TrendsViewModel, contentPadding: PaddingValues) {
         state = state,
         contentPadding = contentPadding,
         callbacks = callbacks,
+        zone = zone,
+        headerTrailing = headerTrailing,
         onCopy = { text ->
             try {
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -158,6 +182,8 @@ fun TrendsScreen(
     state: TrendsScreenState,
     contentPadding: PaddingValues,
     callbacks: TrendsCallbacks,
+    zone: ZoneId = ZoneId.systemDefault(),
+    headerTrailing: @Composable () -> Unit = {},
     onCopy: (String) -> Unit = {},
 ) {
     var confirmClear by rememberSaveable { mutableStateOf(false) }
@@ -170,8 +196,13 @@ fun TrendsScreen(
             .padding(KmfDimens.ScreenPadding),
         verticalArrangement = Arrangement.spacedBy(KmfDimens.SectionGap),
     ) {
-        TrendsHeader(isLive = state.isLive)
-        RangeTabs(state.range, callbacks.onSelectRange)
+        TrendsHeader(headerTrailing)
+        RangeChips(state.range, callbacks.onSelectRange)
+        if (state.isCustom) {
+            CustomRangePanel(state, zone, callbacks.onApplyCustom)
+        } else {
+            WindowStepper(state, callbacks.onStepEarlier, callbacks.onStepLater)
+        }
         ChartCard(state, callbacks)
         EnergyCard(state.energy)
         HistoryCard(
@@ -198,11 +229,19 @@ fun TrendsScreen(
     }
 }
 
+/** Title row; its bottom spacing is 8 dp tighter than the section gap. */
 @Composable
-private fun TrendsHeader(isLive: Boolean) {
+private fun TrendsHeader(trailing: @Composable () -> Unit) {
     val colors = KmfTheme.colors
     Row(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 36.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints)
+                val trim = 8.dp.roundToPx().coerceAtMost(placeable.height)
+                layout(placeable.width, placeable.height - trim) { placeable.placeRelative(0, 0) }
+            },
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -212,49 +251,7 @@ private fun TrendsHeader(isLive: Boolean) {
             color = colors.textPrimary,
             modifier = Modifier.semantics { heading() },
         )
-        if (isLive) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val indicator = if (KmfTheme.reduceMotion) StatusPillIndicator.Steady else StatusPillIndicator.Pulse
-                StatusDot(color = colors.live.accent, indicator = indicator)
-                Text("Live", style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp), color = colors.live.accent)
-            }
-        }
-    }
-}
-
-@Composable
-private fun RangeTabs(selected: TrendsRange, onSelect: (TrendsRange) -> Unit) {
-    val colors = KmfTheme.colors
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(colors.surface, RoundedCornerShape(14.dp))
-            .padding(4.dp)
-            .semantics { contentDescription = "Time range" },
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        TrendsRange.entries.forEach { range ->
-            val isSelected = range == selected
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .heightIn(min = 40.dp)
-                    .background(if (isSelected) colors.border else Color.Transparent, RoundedCornerShape(10.dp))
-                    .clickable(role = Role.Tab) { onSelect(range) }
-                    .semantics { this.selected = isSelected },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = range.label,
-                    style = MaterialTheme.typography.labelLarge.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
-                    color = if (isSelected) colors.textPrimary else colors.textSecondary,
-                    maxLines = 1,
-                )
-            }
-        }
+        trailing()
     }
 }
 
@@ -265,11 +262,7 @@ private fun ChartCard(state: TrendsScreenState, callbacks: TrendsCallbacks) {
         contentPadding = PaddingValues(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 12.dp),
         verticalSpacing = 10.dp,
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            TrendsMetric.entries.forEach { metric ->
-                MetricChip(metric, metric == state.metric, callbacks.onSelectMetric)
-            }
-        }
+        MetricSelector(state.metric, callbacks.onSelectMetric)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -277,20 +270,33 @@ private fun ChartCard(state: TrendsScreenState, callbacks: TrendsCallbacks) {
         ) {
             ValueWithUnit(
                 value = state.nowValue,
-                unit = state.unit,
+                unit = state.nowUnitText,
                 valueStyle = KmfTheme.numbers.large.copy(fontSize = 28.sp, lineHeight = 34.sp),
                 unitStyle = KmfTheme.numbers.largeUnit,
             )
-            Text(state.nowLabel, style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp), color = colors.textSecondary)
+            Text(
+                state.metricCaption,
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
+                color = colors.textSecondary,
+            )
         }
+        val axisInset = rememberTrendChartAxisInset(if (state.points.isEmpty()) null else state.yTicks)
         if (state.points.isEmpty()) {
             EmptyChart(loading = state.loading, description = state.chartDescription)
         } else {
-            ScrubChart(state, callbacks.onScrub)
+            ScrubChart(state, axisInset, callbacks.onScrub)
         }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = axisInset, end = if (state.points.isEmpty()) 0.dp else 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
             state.tickLabels.forEach { tick ->
-                Text(tick, style = KmfTheme.numbers.caption.copy(fontSize = 11.sp, lineHeight = 14.sp), color = colors.textTertiary)
+                Text(
+                    tick,
+                    style = KmfTheme.numbers.caption.copy(fontSize = 11.sp, lineHeight = 14.sp),
+                    color = colors.textTertiary,
+                    maxLines = 1,
+                )
             }
         }
         HorizontalDivider(color = colors.hairline)
@@ -302,32 +308,40 @@ private fun ChartCard(state: TrendsScreenState, callbacks: TrendsCallbacks) {
     }
 }
 
+/** Five equal unit-only segments (W, %, V, A, Ah) in a dark track. */
 @Composable
-private fun MetricChip(metric: TrendsMetric, selected: Boolean, onSelect: (TrendsMetric) -> Unit) {
+private fun MetricSelector(selected: TrendsMetric, onSelect: (TrendsMetric) -> Unit) {
     val colors = KmfTheme.colors
-    val shape = RoundedCornerShape(999.dp)
-    Box(
+    Row(
         modifier = Modifier
-            .heightIn(min = 32.dp)
-            .background(if (selected) colors.charge.pillFill else Color.Transparent, shape)
-            .drawBehind {
-                drawRoundRect(
-                    color = if (selected) colors.charge.borderStrong else colors.border,
-                    cornerRadius = CornerRadius(size.height / 2f),
-                    style = Stroke(width = 1.dp.toPx()),
+            .fillMaxWidth()
+            .background(colors.background, RoundedCornerShape(12.dp))
+            .padding(4.dp)
+            .semantics { contentDescription = "Metric" },
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        TrendsMetric.entries.forEach { metric ->
+            val isSelected = metric == selected
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(36.dp)
+                    .background(if (isSelected) colors.charge.pillFill else Color.Transparent, RoundedCornerShape(9.dp))
+                    .clickable(role = Role.RadioButton) { onSelect(metric) }
+                    .semantics {
+                        this.selected = isSelected
+                        contentDescription = metric.fullName
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = metric.unit,
+                    style = KmfTheme.numbers.small.copy(fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold),
+                    color = if (isSelected) colors.charge.accent else colors.textSecondary,
+                    maxLines = 1,
                 )
             }
-            .clickable(role = Role.Button) { onSelect(metric) }
-            .semantics { this.selected = selected }
-            .padding(horizontal = 12.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = metric.label,
-            style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp, fontWeight = FontWeight.Medium),
-            color = if (selected) colors.charge.accent else colors.textSecondary,
-            maxLines = 1,
-        )
+        }
     }
 }
 
@@ -373,8 +387,10 @@ private fun EmptyChart(loading: Boolean, description: String) {
 private val CHART_HEIGHT = 190.dp
 
 @Composable
-private fun ScrubChart(state: TrendsScreenState, onScrub: (Int) -> Unit) {
+private fun ScrubChart(state: TrendsScreenState, axisInset: Dp, onScrub: (Int) -> Unit) {
     val colors = KmfTheme.colors
+    val insetPx = with(LocalDensity.current) { axisInset.toPx() }
+    val endPadPx = with(LocalDensity.current) { 4.dp.toPx() }
     var widthPx by remember { mutableStateOf(0) }
     var tipWidthPx by remember { mutableStateOf(0) }
     Box(modifier = Modifier.fillMaxWidth().onSizeChanged { widthPx = it.width }) {
@@ -385,14 +401,14 @@ private fun ScrubChart(state: TrendsScreenState, onScrub: (Int) -> Unit) {
             colorMode = state.colorMode,
             contentDescription = state.chartDescription,
             height = CHART_HEIGHT,
-            gridLines = true,
+            yTicks = state.yTicks,
             scrubIndex = state.scrubIndex,
             onScrub = onScrub,
         )
         val tooltip = state.tooltip
         val index = state.scrubIndex
         if (tooltip != null && index != null && widthPx > 0) {
-            val x = state.points[index].xFraction * widthPx
+            val x = insetPx + state.points[index].xFraction * (widthPx - insetPx - endPadPx).coerceAtLeast(1f)
             val left = (x - tipWidthPx / 2f).coerceIn(0f, (widthPx - tipWidthPx).coerceAtLeast(0).toFloat())
             Text(
                 text = tooltip,

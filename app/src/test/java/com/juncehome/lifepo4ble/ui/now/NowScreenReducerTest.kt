@@ -421,6 +421,18 @@ class NowScreenReducerTest {
         assertTrue(chart.points.zipWithNext().all { (a, b) -> a.xFraction <= b.xFraction })
     }
 
+    @Test
+    fun pillForMatchesReducedPillForSharedTabs() {
+        val inputs = listOf(
+            state(phase = CollectionPhase.COLLECTING, frameAgeMs = 2_000L),
+            state(phase = CollectionPhase.COLLECTING, frameAgeMs = 15_000L),
+            state(phase = CollectionPhase.STOPPED, frameAgeMs = 600_000L, configured = false),
+        )
+        inputs.forEach { input ->
+            assertEquals(reduce(input).pill, NowScreenReducer.pillFor(input, now))
+        }
+    }
+
     private fun reduce(input: BleUiState): NowScreenState =
         NowScreenReducer.reduce(input, emptyList(), now, utc)
 

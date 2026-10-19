@@ -264,6 +264,15 @@ object NowScreenReducer {
     fun isLowBattery(reading: KmfReading, hasValues: Boolean): Boolean =
         hasValues && reading.capacityAh > 0.0 && reading.socPercent < LOW_BATTERY_SOC
 
+    /** Connection pill for [state] alone, so tabs other than Now show the identical pill. */
+    fun pillFor(state: BleUiState, nowMs: Long): NowPill {
+        val collection = state.collectionState
+        val hasValues = state.lastReadingTimestampMs != null
+        val frameAgeMs = lastFrameMs(state)?.let { (nowMs - it).coerceAtLeast(0L) }
+        val displayState = resolveDisplayState(state, collection, hasValues, frameAgeMs)
+        return pill(displayState, frameAgeMs, collection, nowMs)
+    }
+
     fun pill(
         displayState: NowDisplayState,
         frameAgeMs: Long?,

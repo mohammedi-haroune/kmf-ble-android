@@ -8,29 +8,29 @@ import com.juncehome.lifepo4ble.data.KmfHistorySummary
 import com.juncehome.lifepo4ble.data.KmfSampleBucketRow
 import com.juncehome.lifepo4ble.ui.components.KmfNumberText
 import com.juncehome.lifepo4ble.ui.components.TrendChartColorMode
+import com.juncehome.lifepo4ble.ui.components.TrendChartMath
 import com.juncehome.lifepo4ble.ui.components.TrendChartPoint
+import com.juncehome.lifepo4ble.ui.components.TrendChartTick
 import java.time.Instant
 import java.time.ZoneId
-import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
-import java.time.temporal.ChronoUnit
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 
-/** Time range selector; [windowMs] is the chart window and [bucketMs] the chart aggregation bucket. */
-enum class TrendsRange(val label: String, val windowMs: Long, val bucketMs: Long) {
-    Live("Live", 15 * 60_000L, 5_000L),
-    Day("24 h", 24 * 3_600_000L, 5 * 60_000L),
-    Week("7 d", 7 * 86_400_000L, 45 * 60_000L),
-    Month("30 d", 30 * 86_400_000L, 3 * 3_600_000L),
-}
-
-enum class TrendsMetric(val label: String, val unit: String, val decimals: Int, val signed: Boolean) {
-    Power("Power", "W", 0, true),
-    Soc("SoC", "%", 0, false),
-    Voltage("Voltage", "V", 2, false),
-    Current("Current", "A", 1, true),
+/** [fullName] is the accessible name of the unit-only segment and the caption next to the value. */
+enum class TrendsMetric(
+    val label: String,
+    val unit: String,
+    val decimals: Int,
+    val signed: Boolean,
+    val fullName: String,
+) {
+    Power("Power", "W", 0, true, "Power"),
+    Soc("SoC", "%", 0, false, "State of charge"),
+    Voltage("Voltage", "V", 2, false, "Voltage"),
+    Current("Current", "A", 1, true, "Current"),
+    Capacity("Capacity", "Ah", 1, false, "Capacity"),
 }
 
 /** Everything the ViewModel loads for one range; the reducer turns it into [TrendsScreenState]. */
@@ -40,6 +40,8 @@ data class TrendsData(
     val latest: KmfBatterySampleEntity?,
     val counterBuckets: List<KmfCounterBucket>,
     val summary: KmfHistorySummary,
+    /** The window these rows were loaded for; null falls back to the preset window ending at [nowMs]. */
+    val window: TrendsWindow? = null,
 )
 
 sealed interface TrendsExportStatus {
@@ -49,42 +51,6 @@ sealed interface TrendsExportStatus {
     data class Failed(val message: String) : TrendsExportStatus
     data object Cleared : TrendsExportStatus
     data class ClearFailed(val message: String) : TrendsExportStatus
-}
-
-/** Energy slot layout for a range (hour or day slots) and how far back counters must be read. */
-object TrendsEnergySlots {
-    private const val HOUR_MS = 3_600_000L
-
-    /** Start instants of the energy slots for [range]; the last slot ends at [nowMs]. */
-    fun slotStarts(range: TrendsRange, nowMs: Long, zone: ZoneId): List<Long> {
-        val now = ZonedDateTime.ofInstant(Instant.ofEpochMilli(nowMs), zone)
-        return when (range) {
-            TrendsRange.Live -> {
-                val midnight = now.truncatedTo(ChronoUnit.DAYS)
-                generateSequence(midnight) { it.plusHours(1) }
-                    .takeWhile { it.toInstant().toEpochMilli() <= nowMs }
-                    .map { it.toInstant().toEpochMilli() }
-                    .toList()
-            }
-            TrendsRange.Day -> {
-                val first = now.truncatedTo(ChronoUnit.HOURS).minusHours(23)
-                (0 until 24).map { first.plusHours(it.toLong()).toInstant().toEpochMilli() }
-            }
-            TrendsRange.Week -> daySlots(now, 7)
-            TrendsRange.Month -> daySlots(now, 30)
-        }
-    }
-
-    private fun daySlots(now: ZonedDateTime, days: Long): List<Long> {
-        val first = now.truncatedTo(ChronoUnit.DAYS).minusDays(days - 1)
-        return (0 until days).map { first.plusDays(it).toInstant().toEpochMilli() }
-    }
-
-    /** First slot start minus one hour, so cross-boundary counter deltas exist for the first slot. */
-    fun energyReadStartMs(range: TrendsRange, nowMs: Long, zone: ZoneId): Long {
-        val first = slotStarts(range, nowMs, zone).firstOrNull() ?: nowMs
-        return first - HOUR_MS
-    }
 }
 
 data class EnergyBar(val upFraction: Float, val downFraction: Float)
@@ -112,6 +78,11 @@ data class TrendsScreenState(
     val nowValue: String,
     val unit: String,
     val nowLabel: String,
+    /** Unit text after the value, e.g. "W" or "/ 200 Ah" for Capacity. */
+    val nowUnitText: String,
+    /** Right-aligned caption of the value line, e.g. "Power - now". */
+    val metricCaption: String,
+    val yTicks: List<TrendChartTick>,
     val tickLabels: List<String>,
     val minText: String,
     val avgText: String,
@@ -129,12 +100,20 @@ data class TrendsScreenState(
     val lastExportLine: String,
     val statusLine: String?,
     val adbCommand: String,
+    val offset: Int,
+    val windowLabel: String,
+    val canEarlier: Boolean,
+    val canLater: Boolean,
+    val isCustom: Boolean,
+    val customFromMs: Long,
+    val customToMs: Long,
+    val nowMs: Long,
+    val earliestMs: Long?,
 )
 
 object TrendsScreenReducer {
     private const val MIN_GAP_MS = 11 * 60_000L
     private const val DAY_MS = 86_400_000L
-    private const val HOUR_MS = 3_600_000L
 
     fun reduce(
         range: TrendsRange,
@@ -146,27 +125,42 @@ object TrendsScreenReducer {
         zone: ZoneId,
         locale: Locale = Locale.US,
         nowMs: Long? = null,
+        offset: Int = 0,
+        custom: TrendsCustomRange? = null,
     ): TrendsScreenState {
         val now = data?.nowMs ?: nowMs
+        val window = if (now == null) null else data?.window ?: TrendsWindows.resolve(range, offset, custom, now)
         val buckets = data?.buckets.orEmpty().sortedBy { it.bucket }
-        val points = if (now == null) emptyList() else chartPoints(range, metric, buckets, now)
+        val points = if (window == null) emptyList() else chartPoints(window, metric, buckets)
         val colorMode = if (metric.signed) TrendChartColorMode.Signed else TrendChartColorMode.Single
         val (yMin, yMax) = yRange(metric, points)
         val selected = if (points.isEmpty() || scrubIndex == null) null else scrubIndex.coerceIn(0, points.lastIndex)
         val tooltip = selected?.let { index ->
             val bucket = buckets.getOrNull(index)
-            val time = bucket?.let { timeFormat(range, zone, locale).format(Instant.ofEpochMilli((it.firstMs + it.lastMs) / 2)) }
+            val time = bucket?.let {
+                formatter(TrendsWindows.timePattern(window!!), zone, locale).format(Instant.ofEpochMilli((it.firstMs + it.lastMs) / 2))
+            }
             "${time ?: KmfNumberText.MISSING} \u00b7 ${format(points[index].value, metric, withUnit = true, locale = locale)}"
         }
         val latestValue = data?.latest?.let { metricOf(metric, it) }
         val nowValue = latestValue?.let { format(it, metric, withUnit = false, locale = locale) } ?: KmfNumberText.MISSING
         val stats = stats(metric, buckets, locale)
         val count = data?.summary?.count ?: 0L
+        val earliest = data?.summary?.earliestMs
         val running = exportStatus is TrendsExportStatus.Running
+        val live = range == TrendsRange.Live
+        val steppable = range != TrendsRange.Live && range != TrendsRange.Custom
+        val nowLabel = if (live) "now" else "latest"
+        val capacitySuffix = if (metric == TrendsMetric.Capacity) capacitySuffix(data?.latest, locale) else null
+        val customRange = if (range == TrendsRange.Custom && window != null) {
+            TrendsCustomRange(window.startMs, window.endMs)
+        } else {
+            custom ?: TrendsCustomRanges.default(now ?: 0L)
+        }
         return TrendsScreenState(
             range = range,
             metric = metric,
-            isLive = range == TrendsRange.Live,
+            isLive = live,
             loading = data == null,
             points = points,
             yMin = yMin,
@@ -174,17 +168,20 @@ object TrendsScreenReducer {
             colorMode = colorMode,
             nowValue = nowValue,
             unit = metric.unit,
-            nowLabel = if (range == TrendsRange.Live) "now" else "latest",
-            tickLabels = if (now == null) emptyList() else tickLabels(range, now, zone, locale),
+            nowLabel = nowLabel,
+            nowUnitText = if (capacitySuffix != null) "$capacitySuffix ${metric.unit}" else metric.unit,
+            metricCaption = "${metric.fullName} - $nowLabel",
+            yTicks = if (points.isEmpty()) emptyList() else TrendChartMath.niceYTicks(yMin, yMax),
+            tickLabels = if (window == null) emptyList() else TrendsWindows.tickLabels(window, zone, locale),
             minText = stats[0],
             avgText = stats[1],
             maxText = stats[2],
             scrubIndex = selected,
             tooltip = tooltip,
             chartDescription = description(range, metric, nowValue, stats, points.isEmpty()),
-            energy = energy(range, data, now, zone, locale),
+            energy = energy(window, data, zone, locale),
             countText = String.format(Locale.US, "%,d", count),
-            summaryLine = summaryLine(count, data?.summary?.earliestMs, data?.summary?.dbSizeBytes ?: 0L, zone, locale),
+            summaryLine = summaryLine(count, earliest, data?.summary?.dbSizeBytes ?: 0L, zone, locale),
             canClear = count > 0 && !running,
             canExport = count > 0 && !running,
             exportButtonLabel = (exportStatus as? TrendsExportStatus.Running)
@@ -193,7 +190,24 @@ object TrendsScreenReducer {
             lastExportLine = lastExportLine(lastExport, now, zone, locale),
             statusLine = statusLine(exportStatus),
             adbCommand = KmfBatteryHistoryExporter.ADB_PULL_COMMAND,
+            offset = window?.offset ?: 0,
+            windowLabel = if (window == null || now == null) KmfNumberText.MISSING else TrendsWindows.label(window, now, zone, locale),
+            canEarlier = steppable && window != null && earliest != null && window.startMs > earliest,
+            canLater = steppable && (window?.offset ?: 0) > 0,
+            isCustom = range == TrendsRange.Custom,
+            customFromMs = customRange.fromMs,
+            customToMs = customRange.toMs,
+            nowMs = now ?: 0L,
+            earliestMs = earliest,
         )
+    }
+
+    /** "/ 200" for the Capacity value line; null when the meter capacity is unknown. */
+    private fun capacitySuffix(latest: KmfBatterySampleEntity?, locale: Locale): String? {
+        val capacity = latest?.capacityAh ?: return null
+        if (!(capacity > 0.0)) return null
+        val whole = String.format(locale, "%.1f", capacity).endsWith(".0")
+        return "/ " + String.format(locale, if (whole) "%.0f" else "%.1f", capacity)
     }
 
     private fun metricOf(metric: TrendsMetric, sample: KmfBatterySampleEntity): Double = when (metric) {
@@ -201,6 +215,7 @@ object TrendsScreenReducer {
         TrendsMetric.Soc -> sample.socPercent
         TrendsMetric.Voltage -> sample.voltageV
         TrendsMetric.Current -> sample.currentA
+        TrendsMetric.Capacity -> sample.remainingAh
     }
 
     private fun avgOf(metric: TrendsMetric, row: KmfSampleBucketRow): Double = when (metric) {
@@ -208,6 +223,7 @@ object TrendsScreenReducer {
         TrendsMetric.Soc -> row.avgSocPercent
         TrendsMetric.Voltage -> row.avgVoltageV
         TrendsMetric.Current -> row.avgCurrentA
+        TrendsMetric.Capacity -> row.avgRemainingAh
     }
 
     private fun minOf(metric: TrendsMetric, row: KmfSampleBucketRow): Double = when (metric) {
@@ -215,6 +231,7 @@ object TrendsScreenReducer {
         TrendsMetric.Soc -> row.minSocPercent
         TrendsMetric.Voltage -> row.minVoltageV
         TrendsMetric.Current -> row.minCurrentA
+        TrendsMetric.Capacity -> row.minRemainingAh
     }
 
     private fun maxOf(metric: TrendsMetric, row: KmfSampleBucketRow): Double = when (metric) {
@@ -222,20 +239,20 @@ object TrendsScreenReducer {
         TrendsMetric.Soc -> row.maxSocPercent
         TrendsMetric.Voltage -> row.maxVoltageV
         TrendsMetric.Current -> row.maxCurrentA
+        TrendsMetric.Capacity -> row.maxRemainingAh
     }
 
     private fun chartPoints(
-        range: TrendsRange,
+        window: TrendsWindow,
         metric: TrendsMetric,
         buckets: List<KmfSampleBucketRow>,
-        nowMs: Long,
     ): List<TrendChartPoint> {
-        val start = nowMs - range.windowMs
-        val gapMs = max(3 * range.bucketMs, MIN_GAP_MS)
+        val span = window.windowMs.coerceAtLeast(1L)
+        val gapMs = max(3 * window.bucketMs, MIN_GAP_MS)
         var previousMid: Long? = null
         return buckets.map { row ->
             val mid = (row.firstMs + row.lastMs) / 2
-            val fraction = ((mid - start).toDouble() / range.windowMs).coerceIn(0.0, 1.0).toFloat()
+            val fraction = ((mid - window.startMs).toDouble() / span).coerceIn(0.0, 1.0).toFloat()
             val gap = previousMid?.let { mid - it > gapMs } ?: false
             previousMid = mid
             TrendChartPoint(xFraction = fraction, value = avgOf(metric, row), startsSegment = gap)
@@ -285,55 +302,32 @@ object TrendsScreenReducer {
     private fun formatter(pattern: String, zone: ZoneId, locale: Locale): DateTimeFormatter =
         DateTimeFormatter.ofPattern(pattern, locale).withZone(zone)
 
-    private fun timeFormat(range: TrendsRange, zone: ZoneId, locale: Locale): DateTimeFormatter = when (range) {
-        TrendsRange.Live -> formatter("HH:mm", zone, locale)
-        TrendsRange.Day, TrendsRange.Week -> formatter("EEE HH:mm", zone, locale)
-        TrendsRange.Month -> formatter("d MMM", zone, locale)
-    }
-
-    private fun tickLabels(range: TrendsRange, nowMs: Long, zone: ZoneId, locale: Locale): List<String> {
-        val start = nowMs - range.windowMs
-        fun at(offsetMs: Long, pattern: String) = formatter(pattern, zone, locale).format(Instant.ofEpochMilli(start + offsetMs))
-        return when (range) {
-            TrendsRange.Live -> listOf("\u221215 min", "\u221210", "\u22125", "now")
-            TrendsRange.Day -> (0..3).map { at(it * 6 * HOUR_MS, "HH:mm") } + "now"
-            TrendsRange.Week -> listOf(0L, 2L, 4L, 6L).map { at(it * DAY_MS, "EEE") }
-            TrendsRange.Month -> listOf(0L, 10L, 20L, 30L).map { at(it * DAY_MS, "d MMM") }
-        }
-    }
-
     private fun energy(
-        range: TrendsRange,
+        window: TrendsWindow?,
         data: TrendsData?,
-        nowMs: Long?,
         zone: ZoneId,
         locale: Locale,
     ): TrendsEnergyState {
-        val title = when (range) {
-            TrendsRange.Live -> "today by hour"
-            TrendsRange.Day -> "last 24 h by hour"
-            TrendsRange.Week -> "last 7 days"
-            TrendsRange.Month -> "last 30 days"
+        if (window == null) {
+            return TrendsEnergyState("", "--", "--", "--", emptyList(), "--", "now", false)
         }
-        if (nowMs == null) {
-            return TrendsEnergyState(title, "--", "--", "--", emptyList(), "--", "now", false)
+        val layout = TrendsEnergySlots.layout(window, zone)
+        val starts = layout.starts
+        val title = energyTitle(window, layout)
+        val pattern = when {
+            window.range == TrendsRange.Live -> "HH:mm"
+            layout.slotDays == 1 && starts.size <= 7 -> "EEE"
+            layout.slotDays > 0 -> "d MMM"
+            window.windowMs <= DAY_MS -> "HH:mm"
+            else -> "EEE HH:mm"
         }
-        val starts = TrendsEnergySlots.slotStarts(range, nowMs, zone)
-        val fine = TrendsEnergyMath.fineEnergy(data?.counterBuckets.orEmpty())
-        val hasData = TrendsEnergyMath.hasData(fine, starts, nowMs)
-        val slots = TrendsEnergyMath.slots(fine, starts, nowMs)
-        val from = starts.firstOrNull()?.let {
-            val pattern = when (range) {
-                TrendsRange.Live, TrendsRange.Day -> "HH:mm"
-                TrendsRange.Week -> "EEE"
-                TrendsRange.Month -> "d MMM"
-            }
-            formatter(pattern, zone, locale).format(Instant.ofEpochMilli(it))
-        } ?: "--"
+        val to = if (window.atNow) "now" else formatter(pattern, zone, locale).format(Instant.ofEpochMilli(window.endMs))
+        val fine = TrendsEnergyMath.fineEnergy(data?.counterBuckets.orEmpty(), layout.fineMs)
+        val hasData = TrendsEnergyMath.hasData(fine, starts, window.endMs)
+        val slots = TrendsEnergyMath.slots(fine, starts, window.endMs)
+        val from = starts.firstOrNull()?.let { formatter(pattern, zone, locale).format(Instant.ofEpochMilli(it)) } ?: "--"
         if (!hasData) {
-            return TrendsEnergyState(
-                title, "--", "--", "--", slots.map { EnergyBar(0f, 0f) }, from, "now", false,
-            )
+            return TrendsEnergyState(title, "--", "--", "--", slots.map { EnergyBar(0f, 0f) }, from, to, false)
         }
         val totalIn = slots.sumOf { it.inKwh }
         val totalOut = slots.sumOf { it.outKwh }
@@ -351,9 +345,16 @@ object TrendsScreenReducer {
             netText = netText,
             bars = bars,
             fromLabel = from,
-            toLabel = "now",
+            toLabel = to,
             hasData = true,
         )
+    }
+
+    private fun energyTitle(window: TrendsWindow, layout: TrendsEnergyLayout): String = when {
+        window.range == TrendsRange.Custom ->
+            "selected period by ${TrendsEnergySlots.slotLabel(layout.slotMs)}"
+        window.offset > 0 -> window.range.energyTitle.removePrefix("last ")
+        else -> window.range.energyTitle
     }
 
     private fun summaryLine(count: Long, earliestMs: Long?, dbSizeBytes: Long, zone: ZoneId, locale: Locale): String {

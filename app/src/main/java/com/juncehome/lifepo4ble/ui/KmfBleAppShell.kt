@@ -23,9 +23,11 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.juncehome.lifepo4ble.AppLog
 import com.juncehome.lifepo4ble.BleApplication
+import com.juncehome.lifepo4ble.ui.components.ConnectionPill
 import com.juncehome.lifepo4ble.ui.components.KmfIcons
 import com.juncehome.lifepo4ble.ui.components.KmfNavigationBar
 import com.juncehome.lifepo4ble.ui.components.KmfNavigationBarItem
+import com.juncehome.lifepo4ble.ui.components.rememberConnectionPill
 import com.juncehome.lifepo4ble.ui.device.DeviceCallbacks
 import com.juncehome.lifepo4ble.ui.device.DeviceRoute
 import com.juncehome.lifepo4ble.ui.device.PermissionAction
@@ -34,6 +36,7 @@ import com.juncehome.lifepo4ble.ui.firstrun.FirstRunPlatformActions
 import com.juncehome.lifepo4ble.ui.firstrun.FirstRunResolver
 import com.juncehome.lifepo4ble.ui.firstrun.FirstRunRoute
 import com.juncehome.lifepo4ble.ui.firstrun.ShellContent
+import com.juncehome.lifepo4ble.ui.now.NowBannerAction
 import com.juncehome.lifepo4ble.ui.now.NowRoute
 import com.juncehome.lifepo4ble.ui.theme.KmfTheme
 import com.juncehome.lifepo4ble.ui.trends.TrendsMetric
@@ -132,6 +135,15 @@ private fun KmfTabsShell(
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination
+    val connectionPill by rememberConnectionPill(state)
+    val onPillAction: (NowBannerAction) -> Unit = { action ->
+        AppLog.d("Shell: connection pill action=$action", "KMF-BLE")
+        when (action) {
+            NowBannerAction.RetryNow, NowBannerAction.Retry -> viewModel.retryCollectionNow()
+            NowBannerAction.Start -> viewModel.startCollectionFromNow()
+            NowBannerAction.SetUp -> onOpenFirstRun("connection pill Set up")
+        }
+    }
     val recentBatterySamples by viewModel.recentBatterySamples.collectAsStateWithLifecycle()
     // Set by the Now power chart tap; consumed by the Trends tab to show Live + Power.
     var trendsLiveRequested by rememberSaveable { mutableStateOf(false) }
@@ -215,7 +227,13 @@ private fun KmfTabsShell(
                         trendsLiveRequested = false
                     }
                 }
-                TrendsRoute(viewModel = trendsViewModel, contentPadding = innerPadding)
+                TrendsRoute(
+                    viewModel = trendsViewModel,
+                    contentPadding = innerPadding,
+                    headerTrailing = {
+                        ConnectionPill(pill = connectionPill, onAction = onPillAction, logSource = "Trends header")
+                    },
+                )
             }
             composable(TopLevelDestination.Device.route) {
                 val notice by viewModel.firstRunNotice.collectAsStateWithLifecycle()
@@ -223,6 +241,9 @@ private fun KmfTabsShell(
                     state = state,
                     notice = notice,
                     contentPadding = innerPadding,
+                    headerTrailing = {
+                        ConnectionPill(pill = connectionPill, onAction = onPillAction, logSource = "Device header")
+                    },
                     callbacks = DeviceCallbacks(
                         onEnableCollection = viewModel::enableBackgroundCollection,
                         onDisableCollection = viewModel::disableBackgroundCollection,
