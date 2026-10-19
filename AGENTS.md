@@ -46,6 +46,10 @@ Current repo behavior should match the official Android app's BLE startup sequen
 - Only after the meter is actively producing the richer state should this app rely on slower follow-up polling such as `:C\n`.
 - Treat `:B=` frames as real protocol state, not parser noise. The official app's readiness condition depends on both `A` and `B`.
 - A useful failure signature is: this app shows correct `Capacity Ah` / `SoC` only while the official app is simultaneously connected. That means the meter is being actively driven into richer output by ongoing BLE startup traffic, not by a one-time persistent device-side mode change.
+- Read `docs/meter-protocol-notes.md` ("Frame decoding reference") before changing `protocol/`, `BleStateReducer`, `CollectionController` or history saving. It has the full A/B/C decoding and two past regressions.
+- Short A frames (`:A=v,i,flag,minutes,x`, no capacity field) carry no real remaining Ah. The parser derives `current * minutes / 60`, which is charge-to-empty when discharging but charge-to-full when charging. Never show or save it as remaining Ah or SoC without the `KmfReadingMerger` correction, or a resync flashes a false low battery.
+- A reading built from zeros plus partial frames must never be saved or shown. Samples need A, B and C in the session, and `KmfHistoryStore.resetSession` must run on every new connection without relying on one lossy event (the event flow has no replay; collectors must subscribe `UNDISPATCHED` when the scope is `Main`).
+- After any change here, repro on device: Device tab Background collection off, Now tab Start, and confirm no zero or low SoC in the first seconds (check `merged reading` log lines).
 - Keep KMF startup control above the raw GATT layer when possible so parsed protocol state can decide whether to keep sending `:*` or stop.
 
 ## Testing Guidelines
