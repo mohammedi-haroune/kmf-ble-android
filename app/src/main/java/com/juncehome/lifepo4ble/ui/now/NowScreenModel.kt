@@ -7,6 +7,7 @@ import com.juncehome.lifepo4ble.protocol.KmfReading
 import com.juncehome.lifepo4ble.ui.BleUiState
 import com.juncehome.lifepo4ble.ui.ConnectionState
 import com.juncehome.lifepo4ble.ui.components.BannerTone
+import com.juncehome.lifepo4ble.ui.components.EnergyText
 import com.juncehome.lifepo4ble.ui.components.KmfNumberText
 import com.juncehome.lifepo4ble.ui.components.StatusPillIndicator
 import java.time.Instant
@@ -137,8 +138,8 @@ data class NowScreenState(
     /** Null shows the "Chart starts with the first readings" placeholder. */
     val chart: NowChart?,
     val dataLink: NowDataLink,
-    val totalsIn: String,
-    val totalsOut: String,
+    val totalsIn: EnergyText,
+    val totalsOut: EnergyText,
 )
 
 /**
@@ -208,8 +209,8 @@ object NowScreenReducer {
             flow = flow(displayState, reading, hasValues, nowMs, zoneId, lastClock),
             chart = chart(displayState, samples, nowMs),
             dataLink = dataLink(displayState, state, nowMs, frameAgeMs),
-            totalsIn = if (hasValues) formatNumber(reading.chargeKwh, 2) else KmfNumberText.MISSING,
-            totalsOut = if (hasValues) formatNumber(reading.dischargeKwh, 2) else KmfNumberText.MISSING,
+            totalsIn = if (hasValues) KmfNumberText.energy(reading.chargeKwh) else EnergyText.MISSING,
+            totalsOut = if (hasValues) KmfNumberText.energy(reading.dischargeKwh) else EnergyText.MISSING,
         )
     }
 

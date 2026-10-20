@@ -23,4 +23,25 @@ class KmfNumberTextTest {
         assertEquals("\u22126.66", KmfNumberText.signed("-6.66", -6.66))
         assertEquals("0.00", KmfNumberText.signed("0.00", 0.0))
     }
+
+    @Test
+    fun energyBelowOneThousandWhUsesWholeWh() {
+        assertEquals(EnergyText("0", "Wh"), KmfNumberText.energy(0.0))
+        assertEquals(EnergyText("12", "Wh"), KmfNumberText.energy(0.012))
+        assertEquals(EnergyText("999", "Wh"), KmfNumberText.energy(0.999))
+    }
+
+    @Test
+    fun energyFromOneThousandWhUsesKwh() {
+        assertEquals(EnergyText("1.00", "kWh"), KmfNumberText.energy(1.0))
+        assertEquals(EnergyText("1.00", "kWh"), KmfNumberText.energy(0.9996))
+        assertEquals(EnergyText("48.31", "kWh"), KmfNumberText.energy(48.314))
+    }
+
+    @Test
+    fun signedEnergyUsesPlusTrueMinusAndUnsignedZero() {
+        assertEquals(EnergyText("+550", "Wh"), KmfNumberText.energy(0.55, signed = true))
+        assertEquals(EnergyText("\u22121.20", "kWh"), KmfNumberText.energy(-1.2, signed = true))
+        assertEquals(EnergyText("0", "Wh"), KmfNumberText.energy(0.0001, signed = true))
+    }
 }

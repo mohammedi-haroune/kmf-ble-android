@@ -74,6 +74,7 @@ import com.juncehome.lifepo4ble.protocol.KmfReading
 import com.juncehome.lifepo4ble.ui.BleUiState
 import com.juncehome.lifepo4ble.ui.components.Banner
 import com.juncehome.lifepo4ble.ui.components.BannerTone
+import com.juncehome.lifepo4ble.ui.components.EnergyText
 import com.juncehome.lifepo4ble.ui.components.KmfIcons
 import com.juncehome.lifepo4ble.ui.components.ConnectionPill
 import com.juncehome.lifepo4ble.ui.components.screenHeader
@@ -655,7 +656,7 @@ private fun LinkTicks(ticks: List<NowLinkTick>, mode: NowLinkMode, fullHeight: D
 }
 
 @Composable
-private fun TotalsFooter(totalsIn: String, totalsOut: String) {
+private fun TotalsFooter(totalsIn: EnergyText, totalsOut: EnergyText) {
     val colors = KmfTheme.colors
     val mono = KmfTheme.numbers.small
     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
@@ -664,10 +665,10 @@ private fun TotalsFooter(totalsIn: String, totalsOut: String) {
         Text(
             text = buildAnnotatedString {
                 append("in ")
-                withStyle(SpanStyle(fontFamily = mono.fontFamily, color = colors.textPrimary)) { append(totalsIn) }
-                append(" \u00b7 out ")
-                withStyle(SpanStyle(fontFamily = mono.fontFamily, color = colors.textPrimary)) { append(totalsOut) }
-                append(" kWh")
+                withStyle(SpanStyle(fontFamily = mono.fontFamily, color = colors.textPrimary)) { append(totalsIn.value) }
+                append(" ${totalsIn.unit} \u00b7 out ")
+                withStyle(SpanStyle(fontFamily = mono.fontFamily, color = colors.textPrimary)) { append(totalsOut.value) }
+                append(" ${totalsOut.unit}")
             },
             style = MaterialTheme.typography.bodySmall,
             color = colors.textSecondary,
