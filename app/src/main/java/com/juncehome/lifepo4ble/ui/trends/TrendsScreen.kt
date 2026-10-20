@@ -6,6 +6,8 @@ import android.content.Context
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,11 +40,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -57,6 +66,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -86,9 +96,11 @@ data class TrendsCallbacks(
     val onSelectMetric: (TrendsMetric) -> Unit = {},
     val onStepEarlier: () -> Unit = {},
     val onStepLater: () -> Unit = {},
+    val onJumpToNow: () -> Unit = {},
     /** Returns why the range was rejected, or null when applied. */
     val onApplyCustom: (fromMs: Long, toMs: Long) -> TrendsCustomError? = { _, _ -> null },
     val onScrub: (Int) -> Unit = {},
+    val onScrubClear: () -> Unit = {},
     val onExport: () -> Unit = {},
     val onCopyAdb: () -> Unit = {},
     val onClear: () -> Unit = {},
@@ -108,8 +120,11 @@ fun TrendsRoute(
     val data by viewModel.data.collectAsStateWithLifecycle()
     val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
     val lastExport by viewModel.lastExport.collectAsStateWithLifecycle()
-    var scrubIndex by remember { mutableStateOf<Int?>(null) }
-    LaunchedEffect(range, offset, custom, metric) { scrubIndex = null }
+    // The scrub is pinned to a moment, not a point index: the window slides on every reload, so an
+    // index would drift to newer samples while the finger is lifted.
+    var scrubAtMs by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(range, offset, custom, metric) { scrubAtMs = null }
+    val scrubIndex = TrendsScreenReducer.scrubIndexAt(data, scrubAtMs)
     val context = LocalContext.current
     val zone = remember { ZoneId.systemDefault() }
     val state by remember(range, offset, custom, metric, data, lastExport, exportStatus, scrubIndex) {
@@ -146,8 +161,18 @@ fun TrendsRoute(
                 AppLog.d("Trends: later period tapped", TAG)
                 viewModel.stepLater()
             },
+            onJumpToNow = {
+                AppLog.d("Trends: jump to now tapped", TAG)
+                viewModel.jumpToNow()
+            },
             onApplyCustom = { from, to -> viewModel.applyCustom(from, to) },
-            onScrub = { scrubIndex = it },
+            onScrub = { scrubAtMs = TrendsScreenReducer.scrubTimeAt(viewModel.data.value, it) },
+            onScrubClear = {
+                if (scrubAtMs != null) {
+                    AppLog.d("Trends: scrub cleared", TAG)
+                    scrubAtMs = null
+                }
+            },
             onExport = {
                 AppLog.d("Trends: export tapped", TAG)
                 viewModel.exportCsv()
@@ -187,10 +212,23 @@ fun TrendsScreen(
     onCopy: (String) -> Unit = {},
 ) {
     var confirmClear by rememberSaveable { mutableStateOf(false) }
+    var chartBounds by remember { mutableStateOf<Rect?>(null) }
+    var screenOrigin by remember { mutableStateOf(Offset.Zero) }
+    val scrubbing = state.scrubIndex != null
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(KmfTheme.colors.background)
+            .onGloballyPositioned { screenOrigin = it.positionInRoot() }
+            // Any touch outside the chart hides the scrub; observed in the Initial pass and never
+            // consumed, so the tapped chip, button or scroll still works.
+            .pointerInput(scrubbing) {
+                if (!scrubbing) return@pointerInput
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    if (chartBounds?.contains(down.position + screenOrigin) != true) callbacks.onScrubClear()
+                }
+            }
             .verticalScroll(rememberScrollState())
             .padding(contentPadding)
             .padding(KmfDimens.ScreenPadding),
@@ -201,9 +239,9 @@ fun TrendsScreen(
         if (state.isCustom) {
             CustomRangePanel(state, zone, callbacks.onApplyCustom)
         } else {
-            WindowStepper(state, callbacks.onStepEarlier, callbacks.onStepLater)
+            WindowStepper(state, callbacks.onStepEarlier, callbacks.onStepLater, callbacks.onJumpToNow)
         }
-        ChartCard(state, callbacks)
+        ChartCard(state, callbacks, onChartBounds = { chartBounds = it })
         EnergyCard(state.energy)
         HistoryCard(
             state = state,
@@ -249,7 +287,7 @@ private fun TrendsHeader(trailing: @Composable () -> Unit) {
 }
 
 @Composable
-private fun ChartCard(state: TrendsScreenState, callbacks: TrendsCallbacks) {
+private fun ChartCard(state: TrendsScreenState, callbacks: TrendsCallbacks, onChartBounds: (Rect) -> Unit = {}) {
     val colors = KmfTheme.colors
     SectionCard(
         contentPadding = PaddingValues(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 12.dp),
@@ -277,26 +315,65 @@ private fun ChartCard(state: TrendsScreenState, callbacks: TrendsCallbacks) {
         if (state.points.isEmpty()) {
             EmptyChart(loading = state.loading, description = state.chartDescription)
         } else {
-            ScrubChart(state, axisInset, callbacks.onScrub)
+            ScrubChart(state, axisInset, callbacks, onChartBounds)
         }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(start = axisInset, end = if (state.points.isEmpty()) 0.dp else 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            state.tickLabels.forEach { tick ->
-                Text(
-                    tick,
-                    style = KmfTheme.numbers.caption.copy(fontSize = 11.sp, lineHeight = 14.sp),
-                    color = colors.textTertiary,
-                    maxLines = 1,
-                )
-            }
-        }
+        AxisLabels(state.axisTicks, axisInset, endPad = if (state.points.isEmpty()) 0.dp else 4.dp)
         HorizontalDivider(color = colors.hairline)
         Row(modifier = Modifier.fillMaxWidth()) {
             StatColumn("Min", state.minText, Alignment.Start, Modifier.weight(1f))
             StatColumn("Average", state.avgText, Alignment.CenterHorizontally, Modifier.weight(1f))
             StatColumn("Max", state.maxText, Alignment.End, Modifier.weight(1f))
+        }
+    }
+}
+
+/**
+ * X axis labels centred under their tick, clamped inside the card. "now" is always kept; any other
+ * label that would come within 8 dp of a kept neighbour is dropped, so labels never touch.
+ */
+@Composable
+private fun AxisLabels(ticks: List<TrendsAxisTick>, axisInset: Dp, endPad: Dp) {
+    val colors = KmfTheme.colors
+    Layout(
+        modifier = Modifier.fillMaxWidth(),
+        content = {
+            ticks.forEach { tick ->
+                Text(
+                    tick.label,
+                    style = KmfTheme.numbers.caption.copy(fontSize = 11.sp, lineHeight = 14.sp),
+                    color = colors.textTertiary,
+                    maxLines = 1,
+                )
+            }
+        },
+    ) { measurables, constraints ->
+        val width = constraints.maxWidth
+        val placeables = measurables.map { it.measure(Constraints()) }
+        val inset = axisInset.roundToPx()
+        val usable = (width - inset - endPad.roundToPx()).coerceAtLeast(1)
+        val gap = 8.dp.roundToPx()
+        val lefts = placeables.mapIndexed { index, placeable ->
+            val center = inset + ticks[index].fraction * usable
+            (center - placeable.width / 2f).roundToInt().coerceIn(0, (width - placeable.width).coerceAtLeast(0))
+        }
+        val endIndex = ticks.indexOfFirst { it.isEnd }
+        val limit = if (endIndex >= 0) lefts[endIndex] - gap else width
+        val shown = BooleanArray(ticks.size)
+        if (endIndex >= 0) shown[endIndex] = true
+        var right = Int.MIN_VALUE
+        ticks.indices.filter { it != endIndex }.forEach { index ->
+            val left = lefts[index]
+            val end = left + placeables[index].width
+            if (left >= right + gap && end <= limit) {
+                shown[index] = true
+                right = end
+            }
+        }
+        val height = placeables.maxOfOrNull { it.height } ?: 0
+        layout(width, height) {
+            placeables.forEachIndexed { index, placeable ->
+                if (shown[index]) placeable.placeRelative(lefts[index], 0)
+            }
         }
     }
 }
@@ -380,13 +457,18 @@ private fun EmptyChart(loading: Boolean, description: String) {
 private val CHART_HEIGHT = 190.dp
 
 @Composable
-private fun ScrubChart(state: TrendsScreenState, axisInset: Dp, onScrub: (Int) -> Unit) {
+private fun ScrubChart(state: TrendsScreenState, axisInset: Dp, callbacks: TrendsCallbacks, onBounds: (Rect) -> Unit) {
     val colors = KmfTheme.colors
     val insetPx = with(LocalDensity.current) { axisInset.toPx() }
     val endPadPx = with(LocalDensity.current) { 4.dp.toPx() }
     var widthPx by remember { mutableStateOf(0) }
     var tipWidthPx by remember { mutableStateOf(0) }
-    Box(modifier = Modifier.fillMaxWidth().onSizeChanged { widthPx = it.width }) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .onSizeChanged { widthPx = it.width }
+            .onGloballyPositioned { onBounds(it.boundsInRoot()) },
+    ) {
         TrendChart(
             points = state.points,
             yMin = state.yMin,
@@ -396,7 +478,9 @@ private fun ScrubChart(state: TrendsScreenState, axisInset: Dp, onScrub: (Int) -
             height = CHART_HEIGHT,
             yTicks = state.yTicks,
             scrubIndex = state.scrubIndex,
-            onScrub = onScrub,
+            onScrub = callbacks.onScrub,
+            onScrubClear = callbacks.onScrubClear,
+            endHalo = state.liveEdge,
         )
         val tooltip = state.tooltip
         val index = state.scrubIndex
@@ -675,7 +759,7 @@ private fun PreviewHost(state: TrendsScreenState) {
 
 @Preview(name = "Trends Live", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1320)
 @Composable
-private fun TrendsLivePreview() = PreviewHost(previewState(TrendsRange.Live, scrub = 20))
+private fun TrendsLivePreview() = PreviewHost(previewState(TrendsRange.Min15, scrub = 20))
 
 @Preview(name = "Trends 24 h", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1320)
 @Composable

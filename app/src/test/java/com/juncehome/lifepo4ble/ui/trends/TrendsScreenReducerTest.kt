@@ -61,22 +61,23 @@ class TrendsScreenReducerTest {
     ) = TrendsScreenReducer.reduce(range, metric, data, lastExport, status, scrub, zone)
 
     @Test
-    fun liveTicksAndEnergySlots() {
-        val state = reduce(TrendsRange.Live)
-        assertEquals(listOf("${minus}15 min", "${minus}10", "${minus}5", "now"), state.tickLabels)
+    fun minuteTicksAndEnergySlots() {
+        val state = reduce(TrendsRange.Min15)
+        assertEquals(listOf("11:54", "11:57", "12:00", "12:03", "now"), state.axisTicks.map { it.label })
         assertEquals("now", state.nowLabel)
         assertTrue(state.isLive)
-        assertEquals("today by hour", state.energy.title)
-        assertEquals("00:00", state.energy.fromLabel)
+        assertEquals("last 15 min by min", state.energy.title)
+        assertEquals("11:52", state.energy.fromLabel)
         assertEquals("now", state.energy.toLabel)
-        assertEquals(13, state.energy.bars.size)
+        assertEquals(15, state.energy.bars.size)
     }
 
     @Test
     fun dayTicksAndEnergySlots() {
         val state = reduce(TrendsRange.Day)
-        assertEquals(listOf("12:07", "18:07", "00:07", "06:07", "now"), state.tickLabels)
-        assertEquals("latest", state.nowLabel)
+        assertEquals(listOf("18:00", "00:00", "06:00", "now"), state.axisTicks.map { it.label })
+        assertEquals("now", state.nowLabel)
+        assertTrue(state.isLive)
         assertEquals("last 24 h by hour", state.energy.title)
         assertEquals("13:00", state.energy.fromLabel)
         assertEquals(24, state.energy.bars.size)
@@ -85,7 +86,7 @@ class TrendsScreenReducerTest {
     @Test
     fun weekTicksAndEnergySlots() {
         val state = reduce(TrendsRange.Week)
-        assertEquals(listOf("Sun", "Tue", "Thu", "Sat"), state.tickLabels)
+        assertEquals(listOf("Mon", "Wed", "Fri", "now"), state.axisTicks.map { it.label })
         assertEquals("last 7 days", state.energy.title)
         assertEquals("Mon", state.energy.fromLabel)
         assertEquals(7, state.energy.bars.size)
@@ -94,7 +95,7 @@ class TrendsScreenReducerTest {
     @Test
     fun monthTicksAndEnergySlots() {
         val state = reduce(TrendsRange.Month)
-        assertEquals(listOf("18 Sep", "28 Sep", "8 Oct", "18 Oct"), state.tickLabels)
+        assertEquals(listOf("21 Sep", "28 Sep", "5 Oct", "12 Oct", "now"), state.axisTicks.map { it.label })
         assertEquals("last 30 days", state.energy.title)
         assertEquals("19 Sep", state.energy.fromLabel)
         assertEquals(30, state.energy.bars.size)
@@ -188,6 +189,19 @@ class TrendsScreenReducerTest {
     }
 
     @Test
+    fun scrubStaysOnTheSameMomentWhileTheWindowSlides() {
+        val before = data(buckets = listOf(row(1, now - 3000), row(2, now - 2000), row(3, now - 1000)))
+        val at = TrendsScreenReducer.scrubTimeAt(before, 1)
+        assertEquals(now - 2000, at)
+        // One bucket dropped off the start and a new one arrived: index 1 is now a newer sample.
+        val after = data(buckets = listOf(row(2, now - 2000), row(3, now - 1000), row(4, now)))
+        assertEquals(0, TrendsScreenReducer.scrubIndexAt(after, at))
+        assertNull(TrendsScreenReducer.scrubIndexAt(after, null))
+        assertNull(TrendsScreenReducer.scrubIndexAt(data(), at))
+        assertNull(TrendsScreenReducer.scrubTimeAt(after, 9))
+    }
+
+    @Test
     fun scrubTooltipClampsAndFormats() {
         val rows = listOf(row(1, now - 2000, power = Triple(5.0, 5.0, 5.0)), row(2, now - 1000, power = Triple(-7.0, -7.0, -7.0)))
         val high = reduce(data = data(buckets = rows), scrub = 99)
@@ -196,7 +210,7 @@ class TrendsScreenReducerTest {
         val low = reduce(data = data(buckets = rows), scrub = -4)
         assertEquals(0, low.scrubIndex)
         assertEquals("Sun 12:06 $dot +5 W", low.tooltip)
-        assertEquals("12:06 $dot +5 W", reduce(TrendsRange.Live, data = data(buckets = rows), scrub = 0).tooltip)
+        assertEquals("12:06:58 $dot +5 W", reduce(TrendsRange.Min15, data = data(buckets = rows), scrub = 0).tooltip)
         assertEquals("18 Oct $dot +5 W", reduce(TrendsRange.Month, data = data(buckets = rows), scrub = 0).tooltip)
         assertNull(reduce(data = data(buckets = rows)).tooltip)
     }
@@ -281,7 +295,7 @@ class TrendsScreenReducerTest {
         val state = reduce(metric = TrendsMetric.Capacity, data = data(buckets = rows, latest = latest))
         assertEquals("164.0", state.nowValue)
         assertEquals("/ 200 Ah", state.nowUnitText)
-        assertEquals("Capacity - latest", state.metricCaption)
+        assertEquals("Capacity - now", state.metricCaption)
         assertEquals("158.0 Ah", state.minText)
         assertEquals("165.0 Ah", state.maxText)
         assertEquals(listOf(160.0, 164.0), state.points.map { it.value })
@@ -294,8 +308,8 @@ class TrendsScreenReducerTest {
 
     @Test
     fun metricCaptionsAndNames() {
-        assertEquals("Power - now", reduce(TrendsRange.Live).metricCaption)
-        assertEquals("State of charge - latest", reduce(metric = TrendsMetric.Soc).metricCaption)
+        assertEquals("Power - now", reduce(TrendsRange.Min15).metricCaption)
+        assertEquals("State of charge - now", reduce(metric = TrendsMetric.Soc).metricCaption)
         assertEquals(
             listOf("W", "%", "V", "A", "Ah"),
             TrendsMetric.entries.map { it.unit },
@@ -319,21 +333,29 @@ class TrendsScreenReducerTest {
         val earliest = now - 30L * 86_400_000L
         val base = data(count = 5, earliest = earliest)
         val atNow = reduce(TrendsRange.Hour6, data = base)
-        assertEquals("Today 06:07 - 12:07", atNow.windowLabel)
+        assertEquals("Today 06:07 - now", atNow.windowLabel)
         assertTrue(atNow.canEarlier)
         assertFalse(atNow.canLater)
+        assertFalse(atNow.liveEdge)
         val shifted = TrendsScreenReducer.reduce(
             TrendsRange.Hour6, TrendsMetric.Power, base, null, TrendsExportStatus.Idle, null, zone, offset = 1,
         )
         assertEquals("Today 00:07 - 06:07", shifted.windowLabel)
         assertTrue(shifted.canLater)
-        assertEquals("06:07", shifted.tickLabels.last())
+        assertFalse(shifted.liveEdge)
+        assertFalse(shifted.isLive)
+        assertEquals("latest", shifted.nowLabel)
+        assertEquals("06:00", shifted.axisTicks.last().label)
         assertEquals("6 h by 30 min", shifted.energy.title)
         assertEquals("06:07", shifted.energy.toLabel)
-        val live = reduce(TrendsRange.Live, data = base)
-        assertFalse(live.canEarlier)
-        assertFalse(live.canLater)
-        assertEquals("Last 15 min", live.windowLabel)
+        val minutes = reduce(TrendsRange.Min15, data = base)
+        assertTrue(minutes.canEarlier)
+        assertFalse(minutes.canLater)
+        assertEquals("Today 11:52 - now", minutes.windowLabel)
+        assertTrue(minutes.liveEdge)
+        assertTrue(reduce(TrendsRange.Hour1, data = base).liveEdge)
+        assertFalse(reduce(TrendsRange.Hour2, data = base).liveEdge)
+        assertFalse(reduce(TrendsRange.Custom, data = base).canLater)
         val oldest = TrendsScreenReducer.reduce(
             TrendsRange.Hour6, TrendsMetric.Power, data(count = 5, earliest = now - 3_600_000L), null,
             TrendsExportStatus.Idle, null, zone,

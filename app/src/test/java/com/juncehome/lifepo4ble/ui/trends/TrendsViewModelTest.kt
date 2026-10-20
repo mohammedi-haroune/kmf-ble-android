@@ -208,14 +208,27 @@ class TrendsViewModelTest {
         runCurrent()
         assertEquals(0, vm.offset.value)
         assertEquals(now, store.bucketCalls.last().second)
+
+        vm.stepEarlier()
+        runCurrent()
+        vm.stepEarlier()
+        runCurrent()
+        assertEquals(2, vm.offset.value)
+        vm.jumpToNow() // chart edge handle
+        runCurrent()
+        assertEquals(0, vm.offset.value)
+        assertEquals(TrendsRange.Hour6, vm.range.value)
+        assertEquals(now, store.bucketCalls.last().second)
+        vm.jumpToNow() // already at now
+        assertEquals(0, vm.offset.value)
     }
 
     @Test
-    fun steppingIsIgnoredForLiveCustomAndWithoutOlderHistory() = runTest {
+    fun steppingIsIgnoredForCustomAndWithoutOlderHistory() = runTest {
         val store = FakeStore()
         val vm = model(store, FakeExport())
         runCurrent()
-        vm.selectRange(TrendsRange.Live)
+        vm.selectRange(TrendsRange.Min15)
         runCurrent()
         vm.stepEarlier()
         assertEquals(0, vm.offset.value)

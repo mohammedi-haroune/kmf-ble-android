@@ -223,7 +223,7 @@ private fun KmfTabsShell(
                 LaunchedEffect(trendsLiveRequested) {
                     if (trendsLiveRequested) {
                         trendsViewModel.selectMetric(TrendsMetric.Power)
-                        trendsViewModel.selectRange(TrendsRange.Live)
+                        trendsViewModel.selectRange(TrendsRange.Min15)
                         trendsLiveRequested = false
                     }
                 }
