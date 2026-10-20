@@ -70,7 +70,10 @@ data class TrendsEnergyState(
 data class TrendsScreenState(
     val range: TrendsRange,
     val metric: TrendsMetric,
+    /** The window ends now, so new samples keep arriving. */
     val isLive: Boolean,
+    /** Pulse the line's end point: the window ends now and is short enough (1 h or less) for growth to show. */
+    val liveEdge: Boolean,
     val loading: Boolean,
     val points: List<TrendChartPoint>,
     val yMin: Double,
@@ -84,7 +87,7 @@ data class TrendsScreenState(
     /** Right-aligned caption of the value line, e.g. "Power - now". */
     val metricCaption: String,
     val yTicks: List<TrendChartTick>,
-    val tickLabels: List<String>,
+    val axisTicks: List<TrendsAxisTick>,
     val minText: String,
     val avgText: String,
     val maxText: String,
@@ -113,7 +116,25 @@ data class TrendsScreenState(
 )
 
 object TrendsScreenReducer {
+    /** Time (bucket midpoint) of chart point [index]; points map 1:1 to the time-sorted buckets. */
+    fun scrubTimeAt(data: TrendsData?, index: Int): Long? =
+        data?.buckets.orEmpty().sortedBy { it.bucket }.getOrNull(index)?.let { (it.firstMs + it.lastMs) / 2 }
+
+    /**
+     * Point index nearest to [timeMs], so a scrub stays on the same moment while the window slides.
+     * Null once that moment has left the window.
+     */
+    fun scrubIndexAt(data: TrendsData?, timeMs: Long?): Int? {
+        if (data == null || timeMs == null) return null
+        val window = data.window
+        if (window != null && (timeMs < window.startMs || timeMs > window.endMs)) return null
+        val mids = data.buckets.sortedBy { it.bucket }.map { (it.firstMs + it.lastMs) / 2 }
+        if (mids.isEmpty()) return null
+        return mids.indices.minByOrNull { abs(mids[it] - timeMs) }
+    }
+
     private const val MIN_GAP_MS = 11 * 60_000L
+    private const val LIVE_EDGE_MAX_WINDOW_MS = 3_600_000L
     private const val DAY_MS = 86_400_000L
 
     fun reduce(
@@ -149,8 +170,9 @@ object TrendsScreenReducer {
         val count = data?.summary?.count ?: 0L
         val earliest = data?.summary?.earliestMs
         val running = exportStatus is TrendsExportStatus.Running
-        val live = range == TrendsRange.Live
-        val steppable = range != TrendsRange.Live && range != TrendsRange.Custom
+        // Every window that ends now reloads on each new sample, whatever its length.
+        val live = window?.atNow == true
+        val steppable = range != TrendsRange.Custom
         val nowLabel = if (live) "now" else "latest"
         val capacitySuffix = if (metric == TrendsMetric.Capacity) capacitySuffix(data?.latest, locale) else null
         val customRange = if (range == TrendsRange.Custom && window != null) {
@@ -162,6 +184,7 @@ object TrendsScreenReducer {
             range = range,
             metric = metric,
             isLive = live,
+            liveEdge = live && range.windowMs <= LIVE_EDGE_MAX_WINDOW_MS,
             loading = data == null,
             points = points,
             yMin = yMin,
@@ -173,7 +196,7 @@ object TrendsScreenReducer {
             nowUnitText = if (capacitySuffix != null) "$capacitySuffix ${metric.unit}" else metric.unit,
             metricCaption = "${metric.fullName} - $nowLabel",
             yTicks = if (points.isEmpty()) emptyList() else TrendChartMath.niceYTicks(yMin, yMax),
-            tickLabels = if (window == null) emptyList() else TrendsWindows.tickLabels(window, zone, locale),
+            axisTicks = if (window == null) emptyList() else TrendsWindows.axisTicks(window, zone, locale),
             minText = stats[0],
             avgText = stats[1],
             maxText = stats[2],
@@ -316,7 +339,6 @@ object TrendsScreenReducer {
         val starts = layout.starts
         val title = energyTitle(window, layout)
         val pattern = when {
-            window.range == TrendsRange.Live -> "HH:mm"
             layout.slotDays == 1 && starts.size <= 7 -> "EEE"
             layout.slotDays > 0 -> "d MMM"
             window.windowMs <= DAY_MS -> "HH:mm"

@@ -17,13 +17,12 @@ class TrendsWindowsTest {
     fun presetsHaveSensiblePointCounts() {
         TrendsRange.entries.filter { it != TrendsRange.Custom }.forEach { range ->
             val points = range.windowMs / range.bucketMs
-            assertTrue("${range.label} has $points points", points in 60..200)
+            assertTrue("${range.label} has $points points", points in 60..300)
         }
         assertEquals(
-            listOf("Live", "1 h", "2 h", "6 h", "12 h", "24 h", "2 d", "7 d", "30 d", "Custom"),
+            listOf("5 m", "15 m", "1 h", "2 h", "6 h", "12 h", "24 h", "2 d", "7 d", "30 d", "Custom"),
             TrendsRange.entries.map { it.label },
         )
-        assertEquals(listOf("1 h", "2 d", "Custom"), TrendsRange.entries.filter { it.startsGroup }.map { it.label })
     }
 
     @Test
@@ -36,9 +35,10 @@ class TrendsWindowsTest {
         assertEquals(now - 12 * 3_600_000L, back.endMs)
         assertEquals(now - 18 * 3_600_000L, back.startMs)
         assertFalse(back.atNow)
-        val live = TrendsWindows.resolve(TrendsRange.Live, 3, null, now)
-        assertEquals(now, live.endMs)
-        assertEquals(0, live.offset)
+        val minutes = TrendsWindows.resolve(TrendsRange.Min5, 3, null, now)
+        assertEquals(now - 15 * 60_000L, minutes.endMs)
+        assertEquals(now - 20 * 60_000L, minutes.startMs)
+        assertEquals(3, minutes.offset)
     }
 
     @Test
@@ -59,26 +59,47 @@ class TrendsWindowsTest {
     fun windowLabels() {
         fun label(range: TrendsRange, offset: Int = 0) =
             TrendsWindows.label(TrendsWindows.resolve(range, offset, null, now), now, zone)
-        assertEquals("Last 15 min", label(TrendsRange.Live))
-        assertEquals("Today 12:32 - 14:32", label(TrendsRange.Hour2))
-        assertEquals("Today 08:32 - 14:32", label(TrendsRange.Hour6))
-        assertEquals("Sat 14:32 - Sun 14:32", label(TrendsRange.Day))
-        assertEquals("Fri 14:32 - Sun 14:32", label(TrendsRange.Day2))
-        assertEquals("11 Oct - 18 Oct", label(TrendsRange.Week))
-        assertEquals("18 Sep - 18 Oct", label(TrendsRange.Month))
+        assertEquals("Today 14:27 - now", label(TrendsRange.Min5))
+        assertEquals("Today 14:02 - 14:17", label(TrendsRange.Min15, offset = 1))
+        assertEquals("Today 12:32 - now", label(TrendsRange.Hour2))
+        assertEquals("Today 08:32 - now", label(TrendsRange.Hour6))
+        assertEquals("Sat 14:32 - now", label(TrendsRange.Day))
+        assertEquals("Fri 14:32 - Sat 14:32", label(TrendsRange.Day, offset = 1))
+        assertEquals("Fri 14:32 - now", label(TrendsRange.Day2))
+        assertEquals("11 Oct - now", label(TrendsRange.Week))
+        assertEquals("4 Oct - 11 Oct", label(TrendsRange.Week, offset = 1))
+        assertEquals("18 Sep - now", label(TrendsRange.Month))
         assertEquals("Yesterday 20:32 - 22:32", label(TrendsRange.Hour2, offset = 8))
     }
 
     @Test
-    fun tickLabelsPerRange() {
-        fun ticks(range: TrendsRange, offset: Int = 0) =
-            TrendsWindows.tickLabels(TrendsWindows.resolve(range, offset, null, now), zone)
-        assertEquals(listOf("${minus}15 min", "${minus}10", "${minus}5", "now"), ticks(TrendsRange.Live))
-        assertEquals(listOf("13:32", "13:47", "14:02", "14:17", "now"), ticks(TrendsRange.Hour1))
-        assertEquals(listOf("14:32", "20:32", "02:32", "08:32", "now"), ticks(TrendsRange.Day))
-        assertEquals(listOf("Fri 14:32", "Sat 02:32", "Sat 14:32", "Sun 02:32", "now"), ticks(TrendsRange.Day2))
-        assertEquals(listOf("Sun", "Tue", "Thu", "Sat"), ticks(TrendsRange.Week))
-        assertEquals("13:32", ticks(TrendsRange.Hour1, offset = 1).last())
+    fun axisTicksSitOnRoundTimes() {
+        fun axis(range: TrendsRange, offset: Int = 0) =
+            TrendsWindows.axisTicks(TrendsWindows.resolve(range, offset, null, now), zone)
+        fun ticksAt(range: TrendsRange, atMs: Long) = TrendsWindows.axisTicks(TrendsWindows.resolve(range, 0, null, atMs), zone)
+        // Same count for 5 m and 15 m whatever the seconds of now.
+        listOf(0L, 7_000L, 31_000L, 59_000L).forEach { s ->
+            assertEquals(5, ticksAt(TrendsRange.Min5, now + s).size)
+            assertEquals(5, ticksAt(TrendsRange.Min15, now + s).size)
+        }
+        fun ticks(range: TrendsRange, offset: Int = 0) = axis(range, offset).map { it.label }
+        assertEquals(listOf("14:28", "14:29", "14:30", "14:31", "now"), ticks(TrendsRange.Min5))
+        assertEquals(listOf("14:03", "14:06", "14:09", "14:12", "14:15"), ticks(TrendsRange.Min15, offset = 1))
+        assertEquals(listOf("13:45", "14:00", "14:15", "now"), ticks(TrendsRange.Hour1))
+        assertEquals(listOf("18:00", "00:00", "06:00", "now"), ticks(TrendsRange.Day))
+        assertEquals(listOf("Sat", "12:00", "Sun", "now"), ticks(TrendsRange.Day2))
+        assertEquals(listOf("Mon", "Wed", "Fri", "now"), ticks(TrendsRange.Week))
+        assertEquals(listOf("21 Sep", "28 Sep", "5 Oct", "12 Oct", "now"), ticks(TrendsRange.Month))
+        assertEquals("13:30", ticks(TrendsRange.Hour1, offset = 1).last())
+        // Positions are real: 14:30 is 58 of the 60 minutes into the 1 h window ending 14:32.
+        assertEquals(43f / 60f, axis(TrendsRange.Hour1)[2].fraction, 1e-4f)
+        assertEquals(58f / 60f, axis(TrendsRange.Hour1, offset = 1).last().fraction, 1e-4f)
+        assertTrue(axis(TrendsRange.Hour1).last().isEnd)
+        assertTrue(axis(TrendsRange.Hour1, offset = 1).none { it.isEnd })
+        TrendsRange.entries.filter { it != TrendsRange.Custom }.forEach { range ->
+            val labels = ticks(range)
+            assertTrue("${range.label} $labels", labels.size in 3..5 && labels.none { it.count { c -> c == ':' } > 1 })
+        }
     }
 
     @Test

@@ -58,8 +58,6 @@ import androidx.compose.ui.unit.sp
 import com.juncehome.lifepo4ble.AppLog
 import com.juncehome.lifepo4ble.ui.components.KmfIcons
 import com.juncehome.lifepo4ble.ui.components.KmfLightButton
-import com.juncehome.lifepo4ble.ui.components.StatusDot
-import com.juncehome.lifepo4ble.ui.components.StatusPillIndicator
 import com.juncehome.lifepo4ble.ui.theme.KmfDimens
 import com.juncehome.lifepo4ble.ui.theme.KmfTheme
 import java.time.Instant
@@ -118,18 +116,14 @@ internal fun RangeChips(selected: TrendsRange, onSelect: (TrendsRange) -> Unit) 
             .horizontalScroll(scroll)
             .padding(horizontal = bleed)
             .semantics { contentDescription = "Time range" },
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TrendsRange.entries.forEachIndexed { index, range ->
-            val gap = when {
-                index == 0 -> 0.dp
-                range.startsGroup -> 12.dp
-                else -> 6.dp
-            }
+        TrendsRange.entries.forEach { range ->
             RangeChip(
                 range = range,
                 selected = range == selected,
-                modifier = Modifier.padding(start = gap),
+                modifier = Modifier,
                 onPlaced = { placed.chips[range] = it },
                 onSelect = onSelect,
             )
@@ -183,9 +177,14 @@ private fun RangeChip(
     }
 }
 
-/** 44 dp bar: earlier button, window text, later button. */
+/** 44 dp bar: earlier button, window text, later button, then skip to now (enabled once stepped back). */
 @Composable
-internal fun WindowStepper(state: TrendsScreenState, onEarlier: () -> Unit, onLater: () -> Unit) {
+internal fun WindowStepper(
+    state: TrendsScreenState,
+    onEarlier: () -> Unit,
+    onLater: () -> Unit,
+    onJumpToNow: () -> Unit,
+) {
     val colors = KmfTheme.colors
     Row(
         modifier = Modifier
@@ -207,20 +206,10 @@ internal fun WindowStepper(state: TrendsScreenState, onEarlier: () -> Unit, onLa
                 maxLines = 1,
                 modifier = Modifier.semantics { contentDescription = "Showing ${state.windowLabel}" },
             )
-            if (state.isLive) {
-                Spacer(Modifier.width(8.dp))
-                val indicator = if (KmfTheme.reduceMotion) StatusPillIndicator.Steady else StatusPillIndicator.Pulse
-                StatusDot(color = colors.live.accent, indicator = indicator)
-                Spacer(Modifier.width(4.dp))
-                Text(
-                    text = "updating",
-                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 14.sp),
-                    color = colors.live.accent,
-                    maxLines = 1,
-                )
-            }
         }
         StepButton(KmfIcons.ChevronRight, "Later period", state.canLater, onLater)
+        Box(Modifier.width(1.dp).height(24.dp).background(colors.hairline))
+        StepButton(KmfIcons.SkipToEnd, "Jump to now", state.canLater, onJumpToNow, enabledTint = colors.charge.accent)
     }
 }
 
@@ -230,6 +219,7 @@ private fun StepButton(
     description: String,
     enabled: Boolean,
     onClick: () -> Unit,
+    enabledTint: Color? = null,
 ) {
     val colors = KmfTheme.colors
     Box(
@@ -242,7 +232,7 @@ private fun StepButton(
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = if (enabled) colors.textPrimary else colors.textTertiary.copy(alpha = 0.4f),
+            tint = if (enabled) enabledTint ?: colors.textPrimary else colors.textTertiary.copy(alpha = 0.4f),
             modifier = Modifier.size(20.dp),
         )
     }

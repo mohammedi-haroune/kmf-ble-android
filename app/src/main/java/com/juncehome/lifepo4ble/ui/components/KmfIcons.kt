@@ -45,6 +45,11 @@ object KmfIcons {
         lineIcon("ChevronRight", "M9 6l6 6 -6 6", strokeWidth = 2.4f)
     }
 
+    /** Window stepper: jump to the window ending now (skip to end). */
+    val SkipToEnd: ImageVector by lazy {
+        lineIcon("SkipToEnd", "M6 6l6 6 -6 6", "M12 6l6 6 -6 6", "M19 5v14", strokeWidth = 2.4f)
+    }
+
     /** Window stepper: previous period. */
     val ChevronLeft: ImageVector by lazy {
         lineIcon("ChevronLeft", "M15 6l-6 6 6 6", strokeWidth = 2.4f)

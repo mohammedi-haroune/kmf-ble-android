@@ -113,10 +113,10 @@ class TrendsViewModel(
         _range.value = range
     }
 
-    /** Shifts the window back by one window length. Ignored for Live and Custom. */
+    /** Shifts the window back by one window length. Ignored for Custom. */
     fun stepEarlier() {
         val range = _range.value
-        if (range == TrendsRange.Live || range == TrendsRange.Custom) {
+        if (range == TrendsRange.Custom) {
             AppLog.d("Trends: earlier ignored for ${range.label}", TAG)
             return
         }
@@ -133,13 +133,24 @@ class TrendsViewModel(
 
     /** Shifts the window forward by one window length; stops at now. */
     fun stepLater() {
-        if (_range.value == TrendsRange.Live || _range.value == TrendsRange.Custom || _offset.value <= 0) {
+        if (_range.value == TrendsRange.Custom || _offset.value <= 0) {
             AppLog.d("Trends: later ignored range=${_range.value.label} offset=${_offset.value}", TAG)
             return
         }
         _data.value = null
         _offset.value -= 1
         AppLog.d("Trends: window later offset=${_offset.value} range=${_range.value.label}", TAG)
+    }
+
+    /** Returns a stepped-back window to the one ending now (stepper skip-to-end button). */
+    fun jumpToNow() {
+        if (_offset.value <= 0) {
+            AppLog.d("Trends: jump to now ignored, already at now range=${_range.value.label}", TAG)
+            return
+        }
+        AppLog.d("Trends: jump to now range=${_range.value.label} offset=${_offset.value} -> 0", TAG)
+        _data.value = null
+        _offset.value = 0
     }
 
     /** Applies a validated custom range and switches to Custom. Returns the validation error, if any. */

@@ -1,11 +1,18 @@
 package com.juncehome.lifepo4ble.ui.components
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -210,12 +217,14 @@ object TrendChartMath {
  * - [gridLines]: horizontal hairlines at top, middle and bottom of the plot area.
  * - [endDot]: dot at the last point, sign-colored in Signed mode.
  * - [gapMarker]: red dashed vertical marker at the last point (data stopped).
+ * - [onScrubClear]: a tap while [scrubIndex] is set hides the scrub instead of moving it.
  * - [scrubIndex] / [onScrub]: vertical scrub line and dot; tap or horizontal drag reports the
  *   nearest point index (vertical scrolling of the page still works).
  * - [yTicks]: left-side tick labels with faint grid lines at each tick (replaces [gridLines]);
  *   reserves the measured label width (at least [TrendChartYAxisInset]) on the left, see
  *   [rememberTrendChartAxisInset].
  * - [height] null: fill the height given by the parent (use weight in a Column).
+ * - [endHalo]: pulses a halo around the end dot to show the line is still growing (off with reduce motion).
  */
 @Composable
 fun TrendChart(
@@ -230,9 +239,11 @@ fun TrendChart(
     gridLines: Boolean = false,
     yTicks: List<TrendChartTick>? = null,
     endDot: Boolean = true,
+    endHalo: Boolean = false,
     gapMarker: Boolean = false,
     scrubIndex: Int? = null,
     onScrub: ((Int) -> Unit)? = null,
+    onScrubClear: (() -> Unit)? = null,
 ) {
     val colors = KmfTheme.colors
     val up = colors.charge.accent
@@ -250,12 +261,20 @@ fun TrendChart(
     val scrubDot = colors.textPrimary
     val currentPoints = rememberUpdatedState(points)
     val currentOnScrub = rememberUpdatedState(onScrub)
+    val currentOnScrubClear = rememberUpdatedState(onScrubClear)
+    val currentScrubIndex = rememberUpdatedState(scrubIndex)
     val currentInsetDp = rememberUpdatedState(axisInsetDp)
+    val halo = if (endHalo && endDot && !KmfTheme.reduceMotion) rememberEndHaloProgress() else null
 
     val touch = if (onScrub != null) {
         Modifier
             .pointerInput(Unit) {
                 detectTapGestures { offset ->
+                    val clear = currentOnScrubClear.value
+                    if (currentScrubIndex.value != null && clear != null) {
+                        clear()
+                        return@detectTapGestures
+                    }
                     val inset = currentInsetDp.value.toPx()
                     report(currentPoints.value, currentOnScrub.value, offset.x - inset, size.width - inset, 4.dp.toPx())
                 }
@@ -360,6 +379,13 @@ fun TrendChart(
         }
         if (endDot && scrubIndex == null) {
             val endColor = if (end.value < 0.0) down else up
+            halo?.value?.let { progress ->
+                drawCircle(
+                    color = endColor.copy(alpha = 0.6f * (1f - progress)),
+                    radius = 4.dp.toPx() + 7.dp.toPx() * progress,
+                    center = Offset(x(end), y(end.value)),
+                )
+            }
             drawCircle(surface, radius = 6.dp.toPx(), center = Offset(x(end), y(end.value)))
             drawCircle(endColor, radius = 4.dp.toPx(), center = Offset(x(end), y(end.value)))
         }
@@ -372,6 +398,24 @@ fun TrendChart(
         }
     }
 }
+
+/** 0..1 halo growth over 1.4 s, then a 0.6 s rest; same rhythm as the live status pulse. */
+@Composable
+private fun rememberEndHaloProgress(): State<Float> =
+    rememberInfiniteTransition(label = "endHalo").animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = keyframes {
+                durationMillis = 2_000
+                0f at 0 using LinearEasing
+                1f at 1_400 using LinearEasing
+                1f at 2_000
+            },
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "endHaloProgress",
+    )
 
 /** [x] and [width] are plot-relative (axis inset already removed). */
 private fun report(

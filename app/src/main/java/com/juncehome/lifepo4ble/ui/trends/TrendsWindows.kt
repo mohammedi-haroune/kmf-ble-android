@@ -1,10 +1,12 @@
 package com.juncehome.lifepo4ble.ui.trends
 
+import java.time.DayOfWeek
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
+import java.time.temporal.TemporalAdjusters
 import java.util.Locale
 import kotlin.math.ceil
 
@@ -15,7 +17,7 @@ private const val DAY_MS = 86_400_000L
 
 /**
  * Time range presets. [windowMs] is the chart window and [bucketMs] the chart aggregation bucket
- * (about 60-200 points per window); [energySlotMs] is the Energy card bar size (0 = chosen from the span).
+ * (about 60-300 points per window); [energySlotMs] is the Energy card bar size (0 = chosen from the span).
  */
 enum class TrendsRange(
     val label: String,
@@ -24,19 +26,18 @@ enum class TrendsRange(
     val bucketMs: Long,
     val energySlotMs: Long,
     val energyTitle: String,
-    /** Adds a small extra gap before this chip to group minutes / hours / days. */
-    val startsGroup: Boolean = false,
 ) {
-    Live("Live", "Last 15 minutes", 15 * MINUTE_MS, 5 * SECOND_MS, HOUR_MS, "today by hour"),
-    Hour1("1 h", "Last 1 hour", HOUR_MS, 30 * SECOND_MS, 5 * MINUTE_MS, "last 1 h by 5 min", startsGroup = true),
+    Min5("5 m", "Last 5 minutes", 5 * MINUTE_MS, SECOND_MS, MINUTE_MS, "last 5 min by min"),
+    Min15("15 m", "Last 15 minutes", 15 * MINUTE_MS, 5 * SECOND_MS, MINUTE_MS, "last 15 min by min"),
+    Hour1("1 h", "Last 1 hour", HOUR_MS, 30 * SECOND_MS, 5 * MINUTE_MS, "last 1 h by 5 min"),
     Hour2("2 h", "Last 2 hours", 2 * HOUR_MS, MINUTE_MS, 10 * MINUTE_MS, "last 2 h by 10 min"),
     Hour6("6 h", "Last 6 hours", 6 * HOUR_MS, 3 * MINUTE_MS, 30 * MINUTE_MS, "last 6 h by 30 min"),
     Hour12("12 h", "Last 12 hours", 12 * HOUR_MS, 5 * MINUTE_MS, HOUR_MS, "last 12 h by hour"),
     Day("24 h", "Last 24 hours", 24 * HOUR_MS, 10 * MINUTE_MS, HOUR_MS, "last 24 h by hour"),
-    Day2("2 d", "Last 2 days", 2 * DAY_MS, 15 * MINUTE_MS, 4 * HOUR_MS, "last 2 days by 4 h", startsGroup = true),
+    Day2("2 d", "Last 2 days", 2 * DAY_MS, 15 * MINUTE_MS, 4 * HOUR_MS, "last 2 days by 4 h"),
     Week("7 d", "Last 7 days", 7 * DAY_MS, HOUR_MS, DAY_MS, "last 7 days"),
     Month("30 d", "Last 30 days", 30 * DAY_MS, 4 * HOUR_MS, DAY_MS, "last 30 days"),
-    Custom("Custom", "Custom range", 2 * DAY_MS, 15 * MINUTE_MS, 0L, "selected period", startsGroup = true),
+    Custom("Custom", "Custom range", 2 * DAY_MS, 15 * MINUTE_MS, 0L, "selected period"),
 }
 
 /** User-chosen custom span (epoch ms); validate with [TrendsCustomRanges.validate]. */
@@ -124,7 +125,7 @@ object TrendsWindows {
         return bucketSteps.firstOrNull { it >= raw } ?: bucketSteps.last()
     }
 
-    /** The window for [range]; [offset] windows back from [nowMs] (ignored for Live and Custom). */
+    /** The window for [range]; [offset] windows back from [nowMs] (ignored for Custom). */
     fun resolve(range: TrendsRange, offset: Int, custom: TrendsCustomRange?, nowMs: Long): TrendsWindow {
         if (range == TrendsRange.Custom) {
             val chosen = custom ?: TrendsCustomRanges.default(nowMs)
@@ -132,62 +133,106 @@ object TrendsWindows {
             val start = minOf(chosen.fromMs, end - MINUTE_MS)
             return TrendsWindow(range, start, end, bucketForSpan(end - start), 0)
         }
-        val steps = if (range == TrendsRange.Live) 0 else offset.coerceAtLeast(0)
+        val steps = offset.coerceAtLeast(0)
         val end = nowMs - steps * range.windowMs
         return TrendsWindow(range, end - range.windowMs, end, range.bucketMs, steps)
     }
 
-    /** "Today 12:32 - 14:32", "Sat 14:32 - Mon 14:32", "12 Oct - 19 Oct", "Last 15 min" for Live. */
+    /** "Today 12:32 - 14:32", "Sat 14:32 - Mon 14:32", "12 Oct - 19 Oct"; the end reads "now" when the window ends now. */
     fun label(window: TrendsWindow, nowMs: Long, zone: ZoneId, locale: Locale = Locale.US): String {
-        if (window.range == TrendsRange.Live) return "Last 15 min"
         fun fmt(pattern: String, ms: Long) =
             DateTimeFormatter.ofPattern(pattern, locale).withZone(zone).format(Instant.ofEpochMilli(ms))
+        fun end(pattern: String) = if (window.atNow) "now" else fmt(pattern, window.endMs)
         val start = ZonedDateTime.ofInstant(Instant.ofEpochMilli(window.startMs), zone)
-        val end = ZonedDateTime.ofInstant(Instant.ofEpochMilli(window.endMs), zone)
+        val endAt = ZonedDateTime.ofInstant(Instant.ofEpochMilli(window.endMs), zone)
         val span = window.windowMs
         return when {
-            span < 7 * DAY_MS && start.toLocalDate() == end.toLocalDate() -> {
+            span < 7 * DAY_MS && start.toLocalDate() == endAt.toLocalDate() -> {
                 val today = ZonedDateTime.ofInstant(Instant.ofEpochMilli(nowMs), zone).toLocalDate()
                 val day = when (start.toLocalDate()) {
                     today -> "Today"
                     today.minusDays(1) -> "Yesterday"
                     else -> fmt("EEE d MMM", window.startMs)
                 }
-                "$day ${fmt("HH:mm", window.startMs)} - ${fmt("HH:mm", window.endMs)}"
+                "$day ${fmt("HH:mm", window.startMs)} - ${end("HH:mm")}"
             }
-            span < 7 * DAY_MS -> "${fmt("EEE HH:mm", window.startMs)} - ${fmt("EEE HH:mm", window.endMs)}"
-            else -> "${fmt("d MMM", window.startMs)} - ${fmt("d MMM", window.endMs)}"
+            span < 7 * DAY_MS -> "${fmt("EEE HH:mm", window.startMs)} - ${end("EEE HH:mm")}"
+            else -> "${fmt("d MMM", window.startMs)} - ${end("d MMM")}"
         }
     }
 
     /** Hover / scrub time format for a window span. */
     fun timePattern(window: TrendsWindow): String = when {
+        window.windowMs <= 15 * MINUTE_MS -> "HH:mm:ss"
         window.windowMs <= 12 * HOUR_MS -> "HH:mm"
         window.windowMs <= 7 * DAY_MS -> "EEE HH:mm"
         else -> "d MMM"
     }
 
-    /** X axis labels; the last one is "now" when the window ends now. */
-    fun tickLabels(window: TrendsWindow, zone: ZoneId, locale: Locale = Locale.US): List<String> {
-        fun at(ms: Long, pattern: String) =
-            DateTimeFormatter.ofPattern(pattern, locale).withZone(zone).format(Instant.ofEpochMilli(ms))
-        val start = window.startMs
-        return when (window.range) {
-            TrendsRange.Live -> listOf("−15 min", "−10", "−5", "now")
-            TrendsRange.Week -> listOf(0L, 2L, 4L, 6L).map { at(start + it * DAY_MS, "EEE") }
-            TrendsRange.Month -> listOf(0L, 10L, 20L, 30L).map { at(start + it * DAY_MS, "d MMM") }
-            else -> {
-                val pattern = when {
-                    window.windowMs <= DAY_MS -> "HH:mm"
-                    window.windowMs <= 3 * DAY_MS -> "EEE HH:mm"
-                    else -> "d MMM"
-                }
-                (0..3).map { at(start + window.windowMs * it / 4, pattern) } +
-                    if (window.atNow) "now" else at(window.endMs, pattern)
-            }
+    /**
+     * X axis labels at round wall-clock times (whole minutes, quarter hours, midnights...) placed at
+     * their real position in the window, never seconds. Picks the smallest step that gives at most
+     * [MAX_AXIS_TICKS] labels, plus "now" at the right edge when the window ends now. "now" owns the
+     * last [END_ZONE] of the axis, so 5 m and 15 m always show four times plus "now". The screen also
+     * drops any label that would touch its neighbour, so long formats never overlap.
+     */
+    fun axisTicks(window: TrendsWindow, zone: ZoneId, locale: Locale = Locale.US): List<TrendsAxisTick> {
+        val span = window.windowMs.coerceAtLeast(1L)
+        val step = axisSteps.firstOrNull { span / it <= MAX_AXIS_TICKS && tickTimes(window, it, zone).size <= MAX_AXIS_TICKS }
+            ?: axisSteps.last()
+        val ticks = tickTimes(window, step, zone).map { ms ->
+            TrendsAxisTick(((ms - window.startMs).toDouble() / span).toFloat(), tickLabel(ms, step, window, zone, locale))
         }
+        if (!window.atNow) return ticks
+        return ticks.filter { it.fraction <= 1f - END_ZONE + 1e-4f } + TrendsAxisTick(1f, "now", isEnd = true)
+    }
+
+    private const val MAX_AXIS_TICKS = 5
+    private const val END_ZONE = 0.2f
+    private val axisSteps = longArrayOf(
+        MINUTE_MS, 2 * MINUTE_MS, 3 * MINUTE_MS, 5 * MINUTE_MS, 10 * MINUTE_MS, 15 * MINUTE_MS, 30 * MINUTE_MS,
+        HOUR_MS, 2 * HOUR_MS, 3 * HOUR_MS, 6 * HOUR_MS, 12 * HOUR_MS, DAY_MS, 2 * DAY_MS, 7 * DAY_MS,
+    )
+
+    /** Round times inside (start, end): sub-day steps align to local midnight, 7 d steps to Mondays. */
+    private fun tickTimes(window: TrendsWindow, step: Long, zone: ZoneId): List<Long> {
+        val startDay = Instant.ofEpochMilli(window.startMs).atZone(zone).truncatedTo(ChronoUnit.DAYS)
+        val first: ZonedDateTime
+        val next: (ZonedDateTime) -> ZonedDateTime
+        if (step >= DAY_MS) {
+            val days = step / DAY_MS
+            first = when (days) {
+                7L -> startDay.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+                else -> startDay.minusDays(Math.floorMod(startDay.toLocalDate().toEpochDay(), days))
+            }
+            next = { it.plusDays(days) }
+        } else {
+            val stepMinutes = step / MINUTE_MS
+            val local = Instant.ofEpochMilli(window.startMs).atZone(zone)
+            val minuteOfDay = local.hour * 60L + local.minute
+            first = startDay.plusMinutes(minuteOfDay / stepMinutes * stepMinutes)
+            next = { it.toLocalDateTime().plusMinutes(stepMinutes).atZone(zone) }
+        }
+        return generateSequence(first, next)
+            .map { it.toInstant().toEpochMilli() }
+            .dropWhile { it <= window.startMs }
+            .takeWhile { it < window.endMs }
+            .toList()
+    }
+
+    private fun tickLabel(ms: Long, step: Long, window: TrendsWindow, zone: ZoneId, locale: Locale): String {
+        val time = Instant.ofEpochMilli(ms).atZone(zone)
+        val pattern = when {
+            step >= DAY_MS -> if (window.windowMs <= 14 * DAY_MS) "EEE" else "d MMM"
+            window.windowMs > DAY_MS && time.hour == 0 && time.minute == 0 -> "EEE"
+            else -> "HH:mm"
+        }
+        return DateTimeFormatter.ofPattern(pattern, locale).format(time)
     }
 }
+
+/** One x axis label at [fraction] of the window (0 = start, 1 = end); [isEnd] is the "now" label. */
+data class TrendsAxisTick(val fraction: Float, val label: String, val isEnd: Boolean = false)
 
 /** Energy bar layout of one window: slot start instants plus the fine counter bucket to read. */
 data class TrendsEnergyLayout(
@@ -212,14 +257,6 @@ object TrendsEnergySlots {
         customUnits.firstOrNull { ceil(spanMs.toDouble() / it) <= MAX_CUSTOM_SLOTS } ?: customUnits.last()
 
     fun layout(window: TrendsWindow, zone: ZoneId): TrendsEnergyLayout {
-        if (window.range == TrendsRange.Live) {
-            val midnight = Instant.ofEpochMilli(window.endMs).atZone(zone).truncatedTo(ChronoUnit.DAYS)
-            val starts = generateSequence(midnight) { it.plusHours(1) }
-                .takeWhile { it.toInstant().toEpochMilli() <= window.endMs }
-                .map { it.toInstant().toEpochMilli() }
-                .toList()
-            return TrendsEnergyLayout(starts, HOUR_MS, TrendsEnergyMath.FINE_BUCKET_MS, 0)
-        }
         val span = window.windowMs.coerceAtLeast(1L)
         val unit = if (window.range == TrendsRange.Custom) customUnit(span) else window.range.energySlotMs
         val count = ceil(span.toDouble() / unit).toInt().coerceIn(1, MAX_SLOTS)
