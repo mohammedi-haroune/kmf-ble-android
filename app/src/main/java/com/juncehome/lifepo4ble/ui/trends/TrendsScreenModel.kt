@@ -6,6 +6,7 @@ import com.juncehome.lifepo4ble.data.KmfBatterySampleEntity
 import com.juncehome.lifepo4ble.data.KmfCounterBucket
 import com.juncehome.lifepo4ble.data.KmfHistorySummary
 import com.juncehome.lifepo4ble.data.KmfSampleBucketRow
+import com.juncehome.lifepo4ble.ui.components.EnergyText
 import com.juncehome.lifepo4ble.ui.components.KmfNumberText
 import com.juncehome.lifepo4ble.ui.components.TrendChartColorMode
 import com.juncehome.lifepo4ble.ui.components.TrendChartMath
@@ -57,9 +58,9 @@ data class EnergyBar(val upFraction: Float, val downFraction: Float)
 
 data class TrendsEnergyState(
     val title: String,
-    val inText: String,
-    val outText: String,
-    val netText: String,
+    val inEnergy: EnergyText,
+    val outEnergy: EnergyText,
+    val netEnergy: EnergyText,
     val bars: List<EnergyBar>,
     val fromLabel: String,
     val toLabel: String,
@@ -309,7 +310,7 @@ object TrendsScreenReducer {
         locale: Locale,
     ): TrendsEnergyState {
         if (window == null) {
-            return TrendsEnergyState("", "--", "--", "--", emptyList(), "--", "now", false)
+            return TrendsEnergyState("", EnergyText.MISSING, EnergyText.MISSING, EnergyText.MISSING, emptyList(), "--", "now", false)
         }
         val layout = TrendsEnergySlots.layout(window, zone)
         val starts = layout.starts
@@ -327,7 +328,7 @@ object TrendsScreenReducer {
         val slots = TrendsEnergyMath.slots(fine, starts, window.endMs)
         val from = starts.firstOrNull()?.let { formatter(pattern, zone, locale).format(Instant.ofEpochMilli(it)) } ?: "--"
         if (!hasData) {
-            return TrendsEnergyState(title, "--", "--", "--", slots.map { EnergyBar(0f, 0f) }, from, to, false)
+            return TrendsEnergyState(title, EnergyText.MISSING, EnergyText.MISSING, EnergyText.MISSING, slots.map { EnergyBar(0f, 0f) }, from, to, false)
         }
         val totalIn = slots.sumOf { it.inKwh }
         val totalOut = slots.sumOf { it.outKwh }
@@ -335,14 +336,11 @@ object TrendsScreenReducer {
         val bars = slots.map {
             if (peak <= 0.0) EnergyBar(0f, 0f) else EnergyBar((it.inKwh / peak).toFloat(), (it.outKwh / peak).toFloat())
         }
-        val net = totalIn - totalOut
-        val netAbs = String.format(locale, "%.2f", abs(net))
-        val netText = if (net >= 0.0 || netAbs.toDouble() == 0.0) "+$netAbs" else KmfNumberText.TRUE_MINUS + netAbs
         return TrendsEnergyState(
             title = title,
-            inText = String.format(locale, "%.2f", totalIn),
-            outText = String.format(locale, "%.2f", totalOut),
-            netText = netText,
+            inEnergy = KmfNumberText.energy(totalIn, locale),
+            outEnergy = KmfNumberText.energy(totalOut, locale),
+            netEnergy = KmfNumberText.energy(totalIn - totalOut, locale, signed = true),
             bars = bars,
             fromLabel = from,
             toLabel = to,

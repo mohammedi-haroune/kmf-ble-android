@@ -7,6 +7,7 @@ import com.juncehome.lifepo4ble.collection.CollectionVisibility
 import com.juncehome.lifepo4ble.data.KmfBatterySampleEntity
 import com.juncehome.lifepo4ble.protocol.KmfReading
 import com.juncehome.lifepo4ble.ui.BleUiState
+import com.juncehome.lifepo4ble.ui.components.EnergyText
 import com.juncehome.lifepo4ble.ui.components.StatusPillIndicator
 import java.time.ZoneId
 import org.junit.Assert.assertEquals
@@ -142,7 +143,7 @@ class NowScreenReducerTest {
         assertNull(model.chart)
         assertEquals("syncing 1/2", model.dataLink.stat)
         assertEquals(NowTone.Charge, model.dataLink.statTone)
-        assertEquals("--", model.totalsIn)
+        assertEquals(EnergyText.MISSING, model.totalsIn)
     }
 
     @Test
@@ -302,8 +303,8 @@ class NowScreenReducerTest {
         assertEquals("13.28", model.voltage)
         assertEquals("164.0", model.ahRemaining)
         assertEquals("200", model.ahCapacity)
-        assertEquals("48.31", model.totalsIn)
-        assertEquals("45.07", model.totalsOut)
+        assertEquals(EnergyText("48.31", "kWh"), model.totalsIn)
+        assertEquals(EnergyText("45.07", "kWh"), model.totalsOut)
         assertEquals("150.5", reduce(state(capacityAh = 150.5)).ahCapacity)
         assertEquals("KMF-01", reduce(state(meterName = "KMF-01")).meterName)
     }

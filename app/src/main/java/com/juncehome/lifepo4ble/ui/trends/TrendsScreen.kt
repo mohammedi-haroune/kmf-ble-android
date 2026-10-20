@@ -65,6 +65,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.juncehome.lifepo4ble.AppLog
 import com.juncehome.lifepo4ble.data.KmfHistorySummary
 import com.juncehome.lifepo4ble.data.KmfSampleBucketRow
+import com.juncehome.lifepo4ble.ui.components.EnergyText
 import com.juncehome.lifepo4ble.ui.components.KmfLightButton
 import com.juncehome.lifepo4ble.ui.components.SectionCard
 import com.juncehome.lifepo4ble.ui.components.TrendChart
@@ -438,17 +439,17 @@ private fun EnergyCard(energy: TrendsEnergyState) {
                             color = colors.textPrimary,
                         ),
                     )
-                    append(energy.netText)
+                    append(energy.netEnergy.value)
                     pop()
-                    append(" kWh")
+                    append(" ${energy.netEnergy.unit}")
                 },
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, lineHeight = 18.sp),
                 color = colors.textSecondary,
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            EnergyTile("In \u00b7 charged", energy.inText, colors.charge.accent, colors.charge.cardFill, Modifier.weight(1f))
-            EnergyTile("Out \u00b7 used", energy.outText, colors.discharge.accent, colors.discharge.cardFill, Modifier.weight(1f))
+            EnergyTile("In \u00b7 charged", energy.inEnergy, colors.charge.accent, colors.charge.cardFill, Modifier.weight(1f))
+            EnergyTile("Out \u00b7 used", energy.outEnergy, colors.discharge.accent, colors.discharge.cardFill, Modifier.weight(1f))
         }
         EnergyBars(energy)
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -459,7 +460,7 @@ private fun EnergyCard(energy: TrendsEnergyState) {
 }
 
 @Composable
-private fun EnergyTile(label: String, value: String, accent: Color, fill: Color, modifier: Modifier) {
+private fun EnergyTile(label: String, energy: EnergyText, accent: Color, fill: Color, modifier: Modifier) {
     Column(
         modifier = modifier
             .background(fill, RoundedCornerShape(KmfDimens.TileRadius))
@@ -467,8 +468,8 @@ private fun EnergyTile(label: String, value: String, accent: Color, fill: Color,
     ) {
         Text(label, style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp), color = accent)
         ValueWithUnit(
-            value = value,
-            unit = "kWh",
+            value = energy.value,
+            unit = energy.unit,
             valueStyle = KmfTheme.numbers.medium,
             unitStyle = KmfTheme.numbers.mediumUnit,
         )
@@ -482,7 +483,8 @@ private fun EnergyBars(energy: TrendsEnergyState) {
     val down = colors.discharge.accent
     val divider = colors.border
     val description = if (energy.hasData) {
-        "Energy in ${energy.inText} kWh above the line, energy out ${energy.outText} kWh below, " +
+        "Energy in ${energy.inEnergy.value} ${energy.inEnergy.unit} above the line, " +
+            "energy out ${energy.outEnergy.value} ${energy.outEnergy.unit} below, " +
             "${energy.bars.size} periods from ${energy.fromLabel} to ${energy.toLabel}"
     } else {
         "Energy per period, no data"
@@ -660,7 +662,8 @@ private fun previewState(range: TrendsRange, empty: Boolean = false, scrub: Int?
         base.copy(
             nowValue = "+164.7",
             energy = TrendsEnergyState(
-                title = base.energy.title, inText = "3.42", outText = "2.87", netText = "+0.55",
+                title = base.energy.title, inEnergy = EnergyText("3.42", "kWh"), outEnergy = EnergyText("2.87", "kWh"),
+                netEnergy = EnergyText("+550", "Wh"),
                 bars = (0 until 24).map { EnergyBar(((it * 7) % 10) / 10f, ((it * 3) % 10) / 10f) },
                 fromLabel = "00:00", toLabel = "now", hasData = true,
             ),

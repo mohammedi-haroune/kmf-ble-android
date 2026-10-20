@@ -6,6 +6,7 @@ import com.juncehome.lifepo4ble.data.KmfBatterySampleEntity
 import com.juncehome.lifepo4ble.data.KmfCounterBucket
 import com.juncehome.lifepo4ble.data.KmfHistorySummary
 import com.juncehome.lifepo4ble.data.KmfSampleBucketRow
+import com.juncehome.lifepo4ble.ui.components.EnergyText
 import com.juncehome.lifepo4ble.ui.components.TrendChartColorMode
 import java.time.Instant
 import java.time.ZoneId
@@ -114,9 +115,9 @@ class TrendsScreenReducerTest {
         )
         val state = reduce(TrendsRange.Day, data = data(counters = counters))
         assertTrue(state.energy.hasData)
-        assertEquals("0.50", state.energy.inText)
-        assertEquals("0.25", state.energy.outText)
-        assertEquals("+0.25", state.energy.netText)
+        assertEquals(EnergyText("500", "Wh"), state.energy.inEnergy)
+        assertEquals(EnergyText("250", "Wh"), state.energy.outEnergy)
+        assertEquals(EnergyText("+250", "Wh"), state.energy.netEnergy)
         assertEquals(EnergyBar(1f, 0.5f), state.energy.bars.last())
         assertEquals(EnergyBar(0f, 0f), state.energy.bars.first())
     }
@@ -127,7 +128,7 @@ class TrendsScreenReducerTest {
         val counters = listOf(
             KmfCounterBucket(slotStart / TrendsEnergyMath.FINE_BUCKET_MS, slotStart, 1.0, 5.0, slotStart + 1000, 1.1, 5.4),
         )
-        assertEquals("${minus}0.30", reduce(data = data(counters = counters)).energy.netText)
+        assertEquals(EnergyText("${minus}300", "Wh"), reduce(data = data(counters = counters)).energy.netEnergy)
     }
 
     @Test
@@ -217,8 +218,8 @@ class TrendsScreenReducerTest {
         assertEquals("--", state.avgText)
         assertEquals("--", state.maxText)
         assertFalse(state.energy.hasData)
-        assertEquals("--", state.energy.inText)
-        assertEquals("--", state.energy.netText)
+        assertEquals(EnergyText.MISSING, state.energy.inEnergy)
+        assertEquals(EnergyText.MISSING, state.energy.netEnergy)
         assertTrue(state.energy.bars.all { it.upFraction == 0f && it.downFraction == 0f })
         assertEquals("No readings saved yet", state.summaryLine)
         assertEquals("0", state.countText)
