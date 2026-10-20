@@ -31,7 +31,9 @@ If `gradlew` does not exist yet, create it before relying on project-local Gradl
 
 ## Coding Style & Naming Conventions
 
-Use Kotlin with Jetpack Compose, Material3, Coroutines, Flow/StateFlow, and manual dependency wiring. Source files and identifiers should remain ASCII-only. Prefer small, focused classes with names matching their responsibility, such as `BlePermissionPolicy`, `KmfLineParser`, `GattOperationQueue`, and `BleViewModel`.
+Use Kotlin with Jetpack Compose, Material3, Coroutines, Flow/StateFlow, and manual dependency wiring. Source files and identifiers should remain ASCII-only.
+
+Hard rule: layout never moves when values or states change. Every element keeps one arrangement and position for all values (worst case such as `100.00%`, `--`, negative signs, long durations) and every state (live, stale, syncing, offline, low battery). Size slots for the widest value (fixed widths, tabular mono digits) instead of reflowing, wrapping, or switching between row and stacked layouts at runtime. Large font scale may pick a different layout once, but that choice must not depend on the current value. Prove new UI against worst-case values on the design canvas before implementing. Prefer small, focused classes with names matching their responsibility, such as `BlePermissionPolicy`, `KmfLineParser`, `GattOperationQueue`, and `BleViewModel`.
 
 Do not hardcode observed KMF MAC addresses, service UUIDs, or characteristic UUIDs in app logic. Treat `planning/resources/kmf.yml` as a behavior reference, not an identifier source.
 Add as much useful logging as practical around BLE discovery, connection state, GATT operations, parsing, persistence, and UI state transitions so failures can be debugged from logs alone.
