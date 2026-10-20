@@ -77,6 +77,12 @@ For KMF protocol changes, verify both levels:
 - Preserve source UTC timestamps, display local time in charts, filter before grouping, average instantaneous readings, and retain the final cumulative energy totals per grouped interval.
 - Do not add Android network synchronization or WebView integration without a separately approved authenticated transport design.
 
+## Cell Watch Design Canvas
+
+- The Cell Watch design canvas (Claude Design artifact https://claude.ai/artifact/8qxHYzF9hc9hYWy9wbQAxm) mirrors the shipped UI. Keep it in sync with the app code.
+- Any change to visible UI (labels, ranges, chips, states, layout, behavior such as which buttons are enabled) must update the matching artboards in the same task, e.g. `G-Trends.dc.html` for the Trends tab, `D-Mix.dc.html` for Now, `F-Device.dc.html` for Device, `N1-Notifications.dc.html` for the collection notification.
+- When the design and the code disagree, the code is what ships: fix the canvas, or ask the user if the difference looks intended. Design explorations live on their own canvas pages and don't count as drift.
+
 ## Commit & Pull Request Guidelines
 
 The plan uses Conventional Commit-style messages, for example `chore: bootstrap native android ble app`, `feat: add kmf protocol parser`, and `docs: document kmf ble validation`. Keep commits scoped to one task or behavior change.
