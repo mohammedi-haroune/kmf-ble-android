@@ -1,5 +1,6 @@
 package com.juncehome.lifepo4ble.ui.now
 
+import androidx.compose.animation.core.EaseInOut
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -102,7 +103,7 @@ private const val TAG = "KMF-BLE"
 
 /** Data link tick colors from the Now board that are not general theme tokens. */
 private val LinkReceivedDim = Color(0xFF2E5E4A)
-private val LinkOfflineReceived = Color(0xFF2A3038)
+private val LinkRailTrack = Color(0xFF262B33)
 
 /** Orbit hero geometry and the app-logo colors (ic_launcher_foreground.xml). */
 private val OrbitRingAreaHeight = 254.dp
@@ -158,7 +159,7 @@ fun NowRoute(
     LaunchedEffect(model.displayState) {
         AppLog.d(
             "Now: display state=${model.displayState} pill='${model.pill.label}' pillAction=${model.pill.action} " +
-                "link='${model.dataLink.stat}' banner='${model.banner?.title}' " +
+                "link='${model.dataLink.stat}' linkRail=${model.dataLink.rail} banner='${model.banner?.title}' " +
                 "phase=${state.collectionState?.phase} hasValues=${model.hasValues}",
             TAG,
         )
@@ -629,23 +630,41 @@ private fun DataLinkCard(link: NowDataLink) {
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text("Data link", style = MaterialTheme.typography.bodySmall, color = colors.textSecondary)
-            LinkTicks(
-                ticks = link.compactTicks,
-                mode = link.mode,
-                fullHeight = 14.dp,
-                modifier = Modifier
-                    .weight(1f)
-                    .semantics { contentDescription = "Frames received over the last 30 seconds: ${link.stat}" },
-            )
-            // Fixed width so the tick strip never shifts when the label changes.
-            Text(
-                text = link.stat,
-                modifier = Modifier.width(DataLinkStatWidth),
-                style = KmfTheme.numbers.small,
-                color = if (link.statTone == NowTone.Neutral) colors.textSecondary else link.statTone.accent().accent,
-                maxLines = 1,
-                textAlign = TextAlign.End,
-            )
+            val statColor = if (link.statTone == NowTone.Neutral) colors.textSecondary else link.statTone.accent().accent
+            val rail = link.rail
+            if (rail == null) {
+                LinkTicks(
+                    ticks = link.compactTicks,
+                    mode = link.mode,
+                    fullHeight = 14.dp,
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics { contentDescription = "Frames received over the last 30 seconds: ${link.stat}" },
+                )
+                // Fixed width so the tick strip never shifts when the label changes.
+                Text(
+                    text = link.stat,
+                    modifier = Modifier.width(DataLinkStatWidth),
+                    style = KmfTheme.numbers.small,
+                    color = statColor,
+                    maxLines = 1,
+                    textAlign = TextAlign.End,
+                )
+            } else {
+                // Link down: the rail runs right up to the state text, which keeps its right edge.
+                LinkRail(
+                    rail = rail,
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics { contentDescription = "Data link: ${link.stat}" },
+                )
+                Text(
+                    text = link.stat,
+                    style = KmfTheme.numbers.small,
+                    color = statColor,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }
@@ -654,51 +673,121 @@ private val DataLinkStatWidth = 112.dp
 private val DataLinkHeight = 32.dp
 private val DataLinkRadius = 12.dp
 
+/**
+ * Full-height ticks only, so the strip never shows small dots. Received seconds are green (dim
+ * except the last 4 s; dim only when stale), missed seconds are faint red bars, and seconds with no
+ * history yet (before the first frame) show the rail track, so bars fill in from the right.
+ */
 @Composable
 private fun LinkTicks(ticks: List<NowLinkTick>, mode: NowLinkMode, fullHeight: Dp, modifier: Modifier = Modifier) {
     val colors = KmfTheme.colors
     val green = colors.live.accent
-    val red = colors.error.accent
+    val missed = colors.error.accent.copy(alpha = LinkMissedAlpha)
     val blue = colors.charge.accent
-    val idle = colors.border
     Canvas(modifier.height(fullHeight)) {
         if (ticks.isEmpty()) return@Canvas
         val gap = 2.dp.toPx()
-        val tickW = (size.width - gap * (ticks.size - 1)) / ticks.size
+        val step = (size.width + gap) / ticks.size
+        val tickW = step - gap
         val full = size.height
-        val missedH = 4.dp.toPx()
-        val lowH = 3.dp.toPx()
-        ticks.forEachIndexed { index, tick ->
+        val trackH = LinkRailHeight.toPx()
+        var index = 0
+        while (index < ticks.size) {
+            if (ticks[index] == NowLinkTick.Idle) {
+                // One track piece per run of seconds without history, joined across the gaps.
+                var end = index
+                while (end + 1 < ticks.size && ticks[end + 1] == NowLinkTick.Idle) end++
+                drawRoundRect(
+                    color = LinkRailTrack,
+                    topLeft = Offset(index * step, (full - trackH) / 2f),
+                    size = Size((end - index + 1) * step - gap, trackH),
+                    cornerRadius = CornerRadius(trackH / 2f),
+                )
+                index = end + 1
+                continue
+            }
             val recent = index >= ticks.size - 4
-            val (height, color) = when (mode) {
-                NowLinkMode.Live -> when (tick) {
-                    NowLinkTick.Received -> full to if (recent) green else LinkReceivedDim
-                    NowLinkTick.Missed -> missedH to red
-                    NowLinkTick.Idle -> lowH to idle
-                }
-                NowLinkMode.Stale -> when (tick) {
-                    NowLinkTick.Received -> full to LinkReceivedDim
-                    NowLinkTick.Missed -> 4.dp.toPx() to red
-                    NowLinkTick.Idle -> lowH to idle
-                }
-                NowLinkMode.Sync -> when (tick) {
-                    NowLinkTick.Received -> full to blue
-                    else -> lowH to idle
-                }
-                NowLinkMode.Offline -> when (tick) {
-                    NowLinkTick.Received -> full to LinkOfflineReceived
-                    else -> lowH to red.copy(alpha = 0.45f)
-                }
+            val color = when {
+                ticks[index] == NowLinkTick.Missed -> missed
+                mode == NowLinkMode.Sync -> blue
+                mode == NowLinkMode.Live && recent -> green
+                else -> LinkReceivedDim
             }
             drawRoundRect(
                 color = color,
-                topLeft = Offset(index * (tickW + gap), full - height),
-                size = Size(tickW, height),
+                topLeft = Offset(index * step, 0f),
+                size = Size(tickW, full),
                 cornerRadius = CornerRadius(1.dp.toPx()),
+            )
+            index++
+        }
+    }
+}
+
+private const val LinkMissedAlpha = 0.35f
+
+/**
+ * One 4 dp rail across the free width. A soft glow sweeps back and forth while the app gets the
+ * link going by itself ([NowLinkRail.Syncing] blue, [NowLinkRail.Retrying] fast amber,
+ * [NowLinkRail.Waiting] slow grey) and parks in
+ * the middle under reduced motion; error and stopped rails stand still.
+ */
+@Composable
+private fun LinkRail(rail: NowLinkRail, modifier: Modifier = Modifier) {
+    val colors = KmfTheme.colors
+    val sweepMs = when (rail) {
+        NowLinkRail.Syncing -> LinkRailSyncSweepMs
+        NowLinkRail.Retrying -> LinkRailFastSweepMs
+        NowLinkRail.Waiting -> LinkRailSlowSweepMs
+        NowLinkRail.Error, NowLinkRail.Stopped -> null
+    }
+    val track = when (rail) {
+        NowLinkRail.Syncing, NowLinkRail.Retrying, NowLinkRail.Waiting -> LinkRailTrack
+        NowLinkRail.Error -> colors.error.accent.copy(alpha = 0.55f)
+        NowLinkRail.Stopped -> colors.border
+    }
+    val glow = when (rail) {
+        NowLinkRail.Syncing -> colors.charge.accent
+        NowLinkRail.Retrying -> colors.discharge.accent
+        else -> colors.textSecondary
+    }
+    val position = when {
+        sweepMs == null -> null
+        KmfTheme.reduceMotion -> 0.5f
+        else -> {
+            val transition = rememberInfiniteTransition(label = "linkRail")
+            val value by transition.animateFloat(
+                initialValue = 0f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(tween(sweepMs, easing = EaseInOut), RepeatMode.Reverse),
+                label = "linkRailSweep",
+            )
+            value
+        }
+    }
+    Canvas(modifier.height(14.dp)) {
+        val railH = LinkRailHeight.toPx()
+        val top = (size.height - railH) / 2f
+        val corner = CornerRadius(railH / 2f)
+        drawRoundRect(color = track, topLeft = Offset(0f, top), size = Size(size.width, railH), cornerRadius = corner)
+        if (position != null) {
+            val glowW = LinkRailGlowWidth.toPx().coerceAtMost(size.width)
+            val x = (size.width - glowW) * position
+            drawRoundRect(
+                brush = Brush.horizontalGradient(listOf(Color.Transparent, glow, Color.Transparent), startX = x, endX = x + glowW),
+                topLeft = Offset(x, top),
+                size = Size(glowW, railH),
+                cornerRadius = corner,
             )
         }
     }
 }
+
+private const val LinkRailSyncSweepMs = 2_000
+private const val LinkRailFastSweepMs = 1_400
+private const val LinkRailSlowSweepMs = 2_800
+private val LinkRailGlowWidth = 22.dp
+private val LinkRailHeight = 4.dp
 
 // ---------------------------------------------------------------------------------------------
 // Previews: one per Now tab state, built through the real reducer.

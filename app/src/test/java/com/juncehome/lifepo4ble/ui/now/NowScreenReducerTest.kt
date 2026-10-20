@@ -37,6 +37,7 @@ class NowScreenReducerTest {
         assertEquals("+12.40", model.flow.current)
         assertEquals(NowTone.Charge, model.barTone)
         assertEquals(NowTone.Neutral, model.dataLink.statTone)
+        assertNull(model.dataLink.rail)
     }
 
     @Test
@@ -91,6 +92,7 @@ class NowScreenReducerTest {
         assertEquals(NowLinkMode.Stale, model.dataLink.mode)
         assertEquals("stalled 15s", model.dataLink.stat)
         assertEquals(NowTone.Discharge, model.dataLink.statTone)
+        assertNull(model.dataLink.rail)
     }
 
     @Test
@@ -142,6 +144,7 @@ class NowScreenReducerTest {
         assertNull(model.chart)
         assertEquals("syncing 1/2", model.dataLink.stat)
         assertEquals(NowTone.Charge, model.dataLink.statTone)
+        assertEquals(NowLinkRail.Syncing, model.dataLink.rail)
     }
 
     @Test
@@ -150,6 +153,7 @@ class NowScreenReducerTest {
 
         assertEquals(NowDisplayState.FirstSync, model.displayState)
         assertEquals("connecting", model.dataLink.stat)
+        assertEquals(NowLinkRail.Syncing, model.dataLink.rail)
     }
 
     @Test
@@ -162,6 +166,23 @@ class NowScreenReducerTest {
         assertEquals("Refreshing estimate\u2026", model.flow.eta)
         assertEquals(NowCellAnimation.None, model.flow.animation)
         assertEquals("resync 1/2", model.dataLink.stat)
+        assertEquals(NowLinkRail.Syncing, model.dataLink.rail)
+    }
+
+    @Test
+    fun linkRailCoversSyncingAndLinkDownSoTheStripNeverShowsEmptySeconds() {
+        // Device repro: the meter is unreachable and the service cycles connect -> retry -> connect.
+        val cycle = listOf(
+            state(phase = CollectionPhase.CONNECTING, frameTimes = emptyList()) to NowLinkRail.Syncing,
+            state(phase = CollectionPhase.ERROR, nextReconnectAtMs = now + 3_000L, attempt = 2) to NowLinkRail.Retrying,
+            state(phase = CollectionPhase.BOOTSTRAPPING, hasA = true, frameTimes = emptyList()) to NowLinkRail.Syncing,
+            state(phase = CollectionPhase.WAITING_FOR_DEVICE) to NowLinkRail.Waiting,
+            state(phase = CollectionPhase.CONNECTING, hasValues = false, frameTimes = emptyList()) to NowLinkRail.Syncing,
+        )
+        cycle.forEach { (input, rail) ->
+            val model = reduce(input)
+            assertEquals("${model.displayState}", rail, model.dataLink.rail)
+        }
     }
 
     @Test
@@ -198,6 +219,7 @@ class NowScreenReducerTest {
         assertEquals("82.00", model.soc)
         assertEquals("dropped", model.dataLink.stat)
         assertEquals(NowTone.Discharge, model.dataLink.statTone)
+        assertEquals(NowLinkRail.Retrying, model.dataLink.rail)
     }
 
     @Test
@@ -223,6 +245,7 @@ class NowScreenReducerTest {
         assertNull(model.banner)
         assertEquals("out of range", model.dataLink.stat)
         assertEquals(NowTone.Neutral, model.dataLink.statTone)
+        assertEquals(NowLinkRail.Waiting, model.dataLink.rail)
     }
 
     @Test
@@ -237,6 +260,7 @@ class NowScreenReducerTest {
         assertNull(model.banner)
         assertEquals("error", model.dataLink.stat)
         assertEquals(NowTone.Error, model.dataLink.statTone)
+        assertEquals(NowLinkRail.Error, model.dataLink.rail)
     }
 
     @Test
@@ -250,6 +274,7 @@ class NowScreenReducerTest {
         assertEquals(NowPillIcon.Play, model.pill.icon)
         assertNull(model.banner)
         assertEquals("off", model.dataLink.stat)
+        assertEquals(NowLinkRail.Stopped, model.dataLink.rail)
         assertEquals("82.00", model.soc)
         assertEquals("Last reading 14:31", model.flow.eta)
     }
@@ -270,6 +295,7 @@ class NowScreenReducerTest {
         assertEquals(NowDisplayState.NoMeter, model.displayState)
         assertEquals(NowBannerAction.SetUp, model.banner?.action)
         assertEquals("KMF Meter", model.meterName)
+        assertEquals(NowLinkRail.Stopped, model.dataLink.rail)
     }
 
     @Test
