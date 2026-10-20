@@ -204,6 +204,7 @@ class BatteryCollectionService : Service() {
         val content = CollectionNotificationContent.from(state, reading, System.currentTimeMillis())
         AppLog.d(
             "collection notification phase=${state.phase} title=\"${content.title}\" text=\"${content.text}\" " +
+                "subText=\"${content.subText}\" " +
                 "sampleAt=${reading?.timestampMs}",
             TAG,
         )
