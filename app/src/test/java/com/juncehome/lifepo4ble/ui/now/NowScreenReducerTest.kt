@@ -7,7 +7,6 @@ import com.juncehome.lifepo4ble.collection.CollectionVisibility
 import com.juncehome.lifepo4ble.data.KmfBatterySampleEntity
 import com.juncehome.lifepo4ble.protocol.KmfReading
 import com.juncehome.lifepo4ble.ui.BleUiState
-import com.juncehome.lifepo4ble.ui.components.EnergyText
 import com.juncehome.lifepo4ble.ui.components.StatusPillIndicator
 import java.time.ZoneId
 import org.junit.Assert.assertEquals
@@ -53,7 +52,7 @@ class NowScreenReducerTest {
     }
 
     @Test
-    fun zeroCurrentCountsAsChargingWithoutSign() {
+    fun zeroCurrentCountsAsChargingWithoutSignAndNaps() {
         val model = reduce(state(phase = CollectionPhase.COLLECTING, currentA = 0.0, powerW = 0.0, minutes = 0))
 
         assertEquals(NowDisplayState.Charging, model.displayState)
@@ -63,7 +62,7 @@ class NowScreenReducerTest {
         assertEquals("0.00", model.flow.power)
         assertEquals("0.00", model.flow.current)
         assertEquals(NowCellAnimation.ChargeWave, model.flow.animation)
-        assertEquals("Estimate unavailable", model.flow.eta)
+        assertEquals("Cells are napping", model.flow.eta)
     }
 
     @Test
@@ -143,7 +142,6 @@ class NowScreenReducerTest {
         assertNull(model.chart)
         assertEquals("syncing 1/2", model.dataLink.stat)
         assertEquals(NowTone.Charge, model.dataLink.statTone)
-        assertEquals(EnergyText.MISSING, model.totalsIn)
     }
 
     @Test
@@ -303,20 +301,20 @@ class NowScreenReducerTest {
         assertEquals("13.28", model.voltage)
         assertEquals("164.00", model.ahRemaining)
         assertEquals("200.00", model.ahCapacity)
-        assertEquals(EnergyText("48.31", "kWh"), model.totalsIn)
-        assertEquals(EnergyText("45.07", "kWh"), model.totalsOut)
+        assertEquals("100", reduce(state(soc = 100.0)).soc)
+        assertEquals("99.99", reduce(state(soc = 99.99)).soc)
         assertEquals("150.50", reduce(state(capacityAh = 150.5)).ahCapacity)
         assertEquals("KMF-01", reduce(state(meterName = "KMF-01")).meterName)
     }
 
     @Test
     fun etaFormatting() {
-        assertEquals("2h 54m \u00b7 17:26", NowScreenReducer.formatEta(174, now, utc))
-        assertEquals("1h 05m \u00b7 15:37", NowScreenReducer.formatEta(65, now, utc))
-        assertEquals("45m \u00b7 15:17", NowScreenReducer.formatEta(45, now, utc))
-        assertEquals("2h 00m \u00b7 16:32", NowScreenReducer.formatEta(120, now, utc))
-        assertNull(NowScreenReducer.formatEta(0, now, utc))
-        assertNull(NowScreenReducer.formatEta(-5, now, utc))
+        assertEquals("2h 54m to full \u00b7 17:26", NowScreenReducer.formatLiveEta(174, charging = true, now, utc))
+        assertEquals("1h 05m left \u00b7 15:37", NowScreenReducer.formatLiveEta(65, charging = false, now, utc))
+        assertEquals("45m left \u00b7 15:17", NowScreenReducer.formatLiveEta(45, charging = false, now, utc))
+        assertEquals("2h 00m to full \u00b7 16:32", NowScreenReducer.formatLiveEta(120, charging = true, now, utc))
+        assertNull(NowScreenReducer.formatLiveEta(0, charging = true, now, utc))
+        assertNull(NowScreenReducer.formatLiveEta(-5, charging = false, now, utc))
     }
 
     @Test
@@ -330,8 +328,33 @@ class NowScreenReducerTest {
         assertEquals("1mo 5d", NowScreenReducer.formatDuration(35 * 1_440))
         assertEquals("2y 3mo", NowScreenReducer.formatDuration(2 * 525_600 + 3 * 43_200))
 
-        assertEquals("2h 54m \u00b7 17:26", reduce(state(minutes = 174)).flow.eta)
+        assertEquals("2h 54m to full \u00b7 17:26", reduce(state(minutes = 174)).flow.eta)
         assertEquals("Estimate unavailable", reduce(state(minutes = 0)).flow.eta)
+    }
+
+    @Test
+    fun orbitSpeedFollowsPowerAndStopsWithoutFlow() {
+        assertEquals(5000, reduce(state(phase = CollectionPhase.COLLECTING, frameAgeMs = 2_000L)).flow.orbitPeriodMs)
+        assertEquals(6250, reduce(state(phase = CollectionPhase.COLLECTING, currentA = -6.66, powerW = -86.3)).flow.orbitPeriodMs)
+        assertEquals(12_000, NowScreenReducer.orbitPeriodMs(10.0))
+        assertEquals(12_000, NowScreenReducer.orbitPeriodMs(2.0))
+        assertEquals(3750, NowScreenReducer.orbitPeriodMs(-300.0))
+        // Never faster than one turn per 2.5 s, however high the power.
+        assertEquals(2_500, NowScreenReducer.orbitPeriodMs(600.0))
+        assertEquals(2_500, NowScreenReducer.orbitPeriodMs(2_000.0))
+        assertNull(reduce(state(phase = CollectionPhase.COLLECTING, currentA = 0.0, powerW = 0.0, minutes = 0)).flow.orbitPeriodMs)
+        assertNull(reduce(state(phase = CollectionPhase.COLLECTING, frameAgeMs = 15_000L)).flow.orbitPeriodMs)
+    }
+
+    @Test
+    fun cometsStayAtFiveUntilTheKneeThenGrowToTen() {
+        assertEquals(5, NowScreenReducer.orbitCometCount(10.0))
+        assertEquals(5, NowScreenReducer.orbitCometCount(-250.0))
+        assertEquals(6, NowScreenReducer.orbitCometCount(300.0))
+        assertEquals(8, NowScreenReducer.orbitCometCount(-400.0))
+        assertEquals(10, NowScreenReducer.orbitCometCount(600.0))
+        assertEquals(10, NowScreenReducer.orbitCometCount(2_000.0))
+        assertEquals(5, reduce(state(phase = CollectionPhase.COLLECTING)).flow.cometCount)
     }
 
     @Test
@@ -394,7 +417,7 @@ class NowScreenReducerTest {
     }
 
     @Test
-    fun chartUsesOnlyLastFifteenMinutesWithMinMaxMeta() {
+    fun chartUsesOnlyLastFifteenMinutesWithMinMaxLabels() {
         val samples = listOf(
             sample(now - 16 * 60_000L, 999.0),
             sample(now - 10 * 60_000L, -64.0),
@@ -404,7 +427,8 @@ class NowScreenReducerTest {
         val chart = requireNotNull(NowScreenReducer.chart(NowDisplayState.Charging, samples, now))
 
         assertEquals(3, chart.points.size)
-        assertEquals("max +212.00 \u00b7 min \u221264.00 W", chart.meta)
+        assertEquals("+212.00 W", chart.maxLabel)
+        assertEquals("\u221264.00 W", chart.minLabel)
         assertEquals(212.0, chart.scaleW, 0.0)
         assertEquals(1f, chart.points.last().xFraction, 0.0001f)
         assertEquals(100.0, chart.endPowerW, 0.0)
