@@ -82,7 +82,7 @@ For KMF protocol changes, verify both levels:
 ## Cell Watch Design Canvas
 
 - The Cell Watch design canvas (Claude Design artifact https://claude.ai/artifact/8qxHYzF9hc9hYWy9wbQAxm) mirrors the shipped UI. Keep it in sync with the app code.
-- Any change to visible UI (labels, ranges, chips, states, layout, behavior such as which buttons are enabled) must update the matching artboards in the same task, e.g. `G-Trends.dc.html` for the Trends tab, `D-Mix.dc.html` for Now, `F-Device.dc.html` for Device, `N1-Notifications.dc.html` for the collection notification.
+- Any change to visible UI (labels, ranges, chips, states, layout, behavior such as which buttons are enabled) must update the matching artboards in the same task, e.g. `G-Trends.dc.html` for the Trends tab, `O-Orbit.dc.html` and its `O01`-`O11` state boards (page "Now · Orbit cell (locked)") for Now, `F-Device.dc.html` for Device, `N1-Notifications.dc.html` for the collection notification.
 - When the design and the code disagree, the code is what ships: fix the canvas, or ask the user if the difference looks intended. Design explorations live on their own canvas pages and don't count as drift.
 
 ## Commit & Pull Request Guidelines
