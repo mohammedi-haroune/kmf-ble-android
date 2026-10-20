@@ -60,7 +60,30 @@ enum class NowCellAnimation { ChargeWave, DrainWave, None }
 enum class NowLinkTick { Received, Missed, Idle }
 
 /** How the Data link ticks are colored. */
-enum class NowLinkMode { Live, Stale, Sync, Offline }
+enum class NowLinkMode { Live, Stale, Sync }
+
+/**
+ * Data link while syncing or while the link is down: one rail from the label to the state text
+ * instead of ticks, so the strip never fills with empty-second dots
+ * (Cell Watch canvas page "Data link - offline options", option D). A glow sweeps it while the app
+ * gets the link back by itself; it stands still while nothing happens until the user acts.
+ */
+enum class NowLinkRail {
+    /** First sync or resync, waiting for both A and B: blue sweep. */
+    Syncing,
+
+    /** Auto-reconnect is scheduled: fast amber sweep. */
+    Retrying,
+
+    /** Waiting for the meter to come back in range: slow grey sweep. */
+    Waiting,
+
+    /** Stopped on an error until Retry: still red rail. */
+    Error,
+
+    /** Collection off, Bluetooth off or no meter: still dark rail. */
+    Stopped,
+}
 
 enum class NowPillIcon { None, Retry, Play }
 
@@ -121,6 +144,8 @@ data class NowDataLink(
     val ticks: List<NowLinkTick>,
     val stat: String,
     val statTone: NowTone,
+    /** Non-null while syncing or while the link is down: draw this rail instead of [ticks]. */
+    val rail: NowLinkRail? = null,
 ) {
     val compactTicks: List<NowLinkTick> get() = ticks.takeLast(NowScreenReducer.COMPACT_TICKS)
 }
@@ -563,7 +588,6 @@ object NowScreenReducer {
         frameAgeMs: Long?,
     ): NowDataLink {
         val mode = when {
-            displayState.isOffline -> NowLinkMode.Offline
             displayState.isSyncing -> NowLinkMode.Sync
             displayState == NowDisplayState.Stale -> NowLinkMode.Stale
             else -> NowLinkMode.Live
@@ -591,7 +615,21 @@ object NowScreenReducer {
             NowDisplayState.CollectionOff -> "off" to NowTone.Neutral
             NowDisplayState.NoMeter -> "no meter" to NowTone.Neutral
         }
-        return NowDataLink(mode = mode, ticks = ticks, stat = stat, statTone = tone)
+        val rail = when (displayState) {
+            NowDisplayState.FirstSync,
+            NowDisplayState.Resyncing -> NowLinkRail.Syncing
+            NowDisplayState.Reconnecting -> NowLinkRail.Retrying
+            NowDisplayState.OutOfRange -> NowLinkRail.Waiting
+            NowDisplayState.CollectionError -> NowLinkRail.Error
+            NowDisplayState.CollectionOff,
+            NowDisplayState.BluetoothOff,
+            NowDisplayState.NoMeter -> NowLinkRail.Stopped
+            NowDisplayState.Charging,
+            NowDisplayState.Discharging,
+            NowDisplayState.LowBattery,
+            NowDisplayState.Stale -> null
+        }
+        return NowDataLink(mode = mode, ticks = ticks, stat = stat, statTone = tone, rail = rail)
     }
 
     /** "15s", "4m", "2h": one unit so the Data link label stays short. */
