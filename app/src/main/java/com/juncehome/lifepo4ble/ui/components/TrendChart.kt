@@ -43,7 +43,6 @@ import kotlin.math.floor
 import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.roundToInt
-import kotlin.math.roundToLong
 
 /** One chart point; [xFraction] 0 = window start, 1 = window end. */
 @Immutable
@@ -149,7 +148,7 @@ object TrendChartMath {
         if (last < first) return emptyList()
         return (first..last).map { index ->
             val value = index * step
-            TrendChartTick(value = value, label = abs(value).roundToLong().toString())
+            TrendChartTick(value = value, label = String.format(java.util.Locale.US, "%.2f", abs(value)))
         }
     }
 

@@ -65,7 +65,7 @@ def build_hourly_power_heatmap(frame: pd.DataFrame) -> go.Figure:
             y=heatmap.index.astype(str),
             colorscale="RdYlGn",
             colorbar={"title": "W"},
-            hovertemplate="Date %{y}<br>Hour %{x}:00<br>Average power %{z:.1f} W<extra></extra>",
+            hovertemplate="Date %{y}<br>Hour %{x}:00<br>Average power %{z:.2f} W<extra></extra>",
         )
     )
     figure.update_layout(title="Average power by day and hour", xaxis_title="Hour of day", yaxis_title="Date")

@@ -264,40 +264,53 @@ private fun SocSection(model: NowScreenState, modifier: Modifier = Modifier) {
         },
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        val hero: @Composable (Modifier) -> Unit = { mod ->
-            ValueWithUnit(
-                value = model.soc,
-                unit = "%",
-                unitSeparator = "",
-                valueStyle = heroStyle,
-                unitStyle = heroUnitStyle,
-                valueColor = socColor,
+        // Two fixed rows for every value and state: SoC alone on line 1, volts and Ah on line 2.
+        // Never switch arrangement by value (see AGENTS.md), only by font scale.
+        val dot = model.soc.indexOf('.')
+        val whole = if (dot >= 0) model.soc.substring(0, dot) else model.soc
+        val fraction = if (dot >= 0) model.soc.substring(dot) else ""
+        val unitSpan = SpanStyle(
+            fontFamily = heroUnitStyle.fontFamily,
+            fontWeight = heroUnitStyle.fontWeight,
+            fontSize = heroUnitStyle.fontSize,
+            letterSpacing = heroUnitStyle.letterSpacing,
+            fontFeatureSettings = heroUnitStyle.fontFeatureSettings,
+        )
+        Text(
+            text = buildAnnotatedString {
+                append(whole)
+                withStyle(unitSpan) { append(fraction) }
+                withStyle(unitSpan.copy(color = colors.textSecondary)) { append("%") }
+            },
+            style = heroStyle,
+            color = socColor,
+            maxLines = 1,
+        )
+        val voltage: @Composable (Modifier) -> Unit = { mod ->
+            ValueWithUnit(value = model.voltage, unit = "V", modifier = mod)
+        }
+        val ah: @Composable (Modifier) -> Unit = { mod ->
+            Text(
+                text = buildAnnotatedString {
+                    withStyle(SpanStyle(color = colors.textPrimary)) { append(model.ahRemaining) }
+                    append(" / ${model.ahCapacity} Ah")
+                },
+                style = numbers.small.copy(fontSize = 15.sp, lineHeight = 20.sp),
+                color = colors.textSecondary,
+                maxLines = 1,
                 modifier = mod,
             )
         }
-        val details: @Composable (Modifier, Alignment.Horizontal) -> Unit = { mod, align ->
-            Column(modifier = mod, horizontalAlignment = align) {
-                ValueWithUnit(value = model.voltage, unit = "V")
-                Text(
-                    text = buildAnnotatedString {
-                        withStyle(SpanStyle(color = colors.textPrimary)) { append(model.ahRemaining) }
-                        append(" / ${model.ahCapacity} Ah")
-                    },
-                    style = numbers.small.copy(fontSize = 15.sp, lineHeight = 20.sp),
-                    color = colors.textSecondary,
-                    maxLines = 1,
-                )
-            }
-        }
         if (fontScale > 1.3f) {
-            // Large text: stack so neither value is clipped.
-            hero(Modifier)
-            details(Modifier, Alignment.Start)
+            // Large text: volts and Ah each get their own line so neither is clipped.
+            Column {
+                voltage(Modifier)
+                ah(Modifier)
+            }
         } else {
-            Row(modifier = Modifier.fillMaxWidth()) {
-                hero(Modifier.alignBy(LastBaseline))
-                Spacer(Modifier.weight(1f))
-                details(Modifier.alignBy(LastBaseline), Alignment.End)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                voltage(Modifier.alignBy(LastBaseline))
+                ah(Modifier.alignBy(LastBaseline))
             }
         }
         BatteryBar(fraction = model.socFraction, accent = model.barTone.accent(), low = model.lowBattery)

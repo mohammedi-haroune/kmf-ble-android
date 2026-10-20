@@ -34,7 +34,7 @@ class NowScreenReducerTest {
         assertEquals("Charging", model.flow.label)
         assertEquals(NowTone.Charge, model.flow.tone)
         assertEquals(NowCellAnimation.ChargeWave, model.flow.animation)
-        assertEquals("+164.7", model.flow.power)
+        assertEquals("+164.70", model.flow.power)
         assertEquals("+12.40", model.flow.current)
         assertEquals(NowTone.Charge, model.barTone)
         assertEquals(NowTone.Neutral, model.dataLink.statTone)
@@ -45,7 +45,7 @@ class NowScreenReducerTest {
         val model = reduce(state(phase = CollectionPhase.COLLECTING, currentA = -6.66, powerW = -86.3))
 
         assertEquals(NowDisplayState.Discharging, model.displayState)
-        assertEquals("\u221286.3", model.flow.power)
+        assertEquals("\u221286.30", model.flow.power)
         assertEquals("\u22126.66", model.flow.current)
         assertEquals(NowTone.Discharge, model.flow.tone)
         assertEquals(NowCellAnimation.DrainWave, model.flow.animation)
@@ -60,7 +60,7 @@ class NowScreenReducerTest {
         assertEquals("Charging", model.flow.label)
         assertEquals(NowTone.Charge, model.flow.tone)
         assertEquals(NowTone.Charge, model.barTone)
-        assertEquals("0.0", model.flow.power)
+        assertEquals("0.00", model.flow.power)
         assertEquals("0.00", model.flow.current)
         assertEquals(NowCellAnimation.ChargeWave, model.flow.animation)
         assertEquals("Estimate unavailable", model.flow.eta)
@@ -87,7 +87,7 @@ class NowScreenReducerTest {
         assertEquals("No data \u00b7 15s", model.pill.label)
         assertEquals(NowTone.Discharge, model.pill.tone)
         assertNull(model.banner)
-        assertEquals("82", model.soc)
+        assertEquals("82.00", model.soc)
         assertEquals(NowCellAnimation.None, model.flow.animation)
         assertEquals(NowLinkMode.Stale, model.dataLink.mode)
         assertEquals("stalled 15s", model.dataLink.stat)
@@ -160,7 +160,7 @@ class NowScreenReducerTest {
 
         assertEquals(NowDisplayState.Resyncing, model.displayState)
         assertEquals("Syncing", model.pill.label)
-        assertEquals("82", model.soc)
+        assertEquals("82.00", model.soc)
         assertEquals("Refreshing estimate\u2026", model.flow.eta)
         assertEquals(NowCellAnimation.None, model.flow.animation)
         assertEquals("resync 1/2", model.dataLink.stat)
@@ -197,7 +197,7 @@ class NowScreenReducerTest {
         assertEquals("Charging", model.flow.label)
         assertEquals("Last reading 14:31", model.flow.eta)
         assertEquals(NowCellAnimation.None, model.flow.animation)
-        assertEquals("82", model.soc)
+        assertEquals("82.00", model.soc)
         assertEquals("dropped", model.dataLink.stat)
         assertEquals(NowTone.Discharge, model.dataLink.statTone)
     }
@@ -252,7 +252,7 @@ class NowScreenReducerTest {
         assertEquals(NowPillIcon.Play, model.pill.icon)
         assertNull(model.banner)
         assertEquals("off", model.dataLink.stat)
-        assertEquals("82", model.soc)
+        assertEquals("82.00", model.soc)
         assertEquals("Last reading 14:31", model.flow.eta)
     }
 
@@ -285,7 +285,7 @@ class NowScreenReducerTest {
         ).forEach { input ->
             val model = NowScreenReducer.reduce(input, samples, now, utc)
             assertTrue(model.displayState.isOffline)
-            assertEquals("82", model.soc)
+            assertEquals("82.00", model.soc)
             assertEquals("13.28", model.voltage)
             assertEquals(NowTone.Charge, model.flow.tone)
             assertTrue(requireNotNull(model.chart).gapMarker)
@@ -298,14 +298,14 @@ class NowScreenReducerTest {
     fun valueFormatting() {
         val model = reduce(state(soc = 82.4, remainingAh = 164.0, capacityAh = 200.0, chargeKwh = 48.314, dischargeKwh = 45.07))
 
-        assertEquals("82", model.soc)
+        assertEquals("82.40", model.soc)
         assertEquals(0.824f, model.socFraction, 0.0001f)
         assertEquals("13.28", model.voltage)
-        assertEquals("164.0", model.ahRemaining)
-        assertEquals("200", model.ahCapacity)
+        assertEquals("164.00", model.ahRemaining)
+        assertEquals("200.00", model.ahCapacity)
         assertEquals(EnergyText("48.31", "kWh"), model.totalsIn)
         assertEquals(EnergyText("45.07", "kWh"), model.totalsOut)
-        assertEquals("150.5", reduce(state(capacityAh = 150.5)).ahCapacity)
+        assertEquals("150.50", reduce(state(capacityAh = 150.5)).ahCapacity)
         assertEquals("KMF-01", reduce(state(meterName = "KMF-01")).meterName)
     }
 
@@ -404,7 +404,7 @@ class NowScreenReducerTest {
         val chart = requireNotNull(NowScreenReducer.chart(NowDisplayState.Charging, samples, now))
 
         assertEquals(3, chart.points.size)
-        assertEquals("max +212 \u00b7 min \u221264 W", chart.meta)
+        assertEquals("max +212.00 \u00b7 min \u221264.00 W", chart.meta)
         assertEquals(212.0, chart.scaleW, 0.0)
         assertEquals(1f, chart.points.last().xFraction, 0.0001f)
         assertEquals(100.0, chart.endPowerW, 0.0)

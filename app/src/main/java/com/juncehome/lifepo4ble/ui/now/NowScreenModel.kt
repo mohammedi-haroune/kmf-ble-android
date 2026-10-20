@@ -16,7 +16,6 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.ceil
-import kotlin.math.roundToInt
 
 /** One display state per row of docs/design/README.md "Now tab states". */
 enum class NowDisplayState {
@@ -194,10 +193,10 @@ object NowScreenReducer {
             pill = pill(displayState, frameAgeMs, collection, nowMs),
             banner = banner(displayState),
             hasValues = hasValues,
-            soc = if (hasValues) formatNumber(reading.socPercent, 0) else KmfNumberText.MISSING,
+            soc = if (hasValues) formatNumber(reading.socPercent, 2) else KmfNumberText.MISSING,
             socFraction = if (hasValues) (reading.socPercent / 100.0).coerceIn(0.0, 1.0).toFloat() else 0f,
             voltage = if (hasValues) formatNumber(reading.voltageV, 2) else "--.--",
-            ahRemaining = if (hasValues) formatNumber(reading.remainingAh, 1) else KmfNumberText.MISSING,
+            ahRemaining = if (hasValues) formatNumber(reading.remainingAh, 2) else KmfNumberText.MISSING,
             ahCapacity = formatCapacity(reading.capacityAh, hasValues),
             barTone = when {
                 lowBattery -> NowTone.Error
@@ -380,7 +379,7 @@ object NowScreenReducer {
             )
         }
         val tone = flowTone(reading)
-        val power = formatSigned(reading.powerW, 1)
+        val power = formatSigned(reading.powerW, 2)
         val current = formatSigned(reading.currentA, 2)
         val liveAnimation = when (tone) {
             NowTone.Charge -> NowCellAnimation.ChargeWave
@@ -452,7 +451,7 @@ object NowScreenReducer {
         val max = inWindow.maxOf { it.powerW }
         val min = inWindow.minOf { it.powerW }
         val scale = maxOf(abs(max), abs(min), 1.0)
-        val meta = "max ${formatSigned(max, 0)} $DOT min ${formatSigned(min, 0)} W"
+        val meta = "max ${formatSigned(max, 2)} $DOT min ${formatSigned(min, 2)} W"
         return NowChart(
             points = points,
             scaleW = scale,
@@ -559,7 +558,7 @@ object NowScreenReducer {
         }
     }
 
-    /** "+164.7" / "\u221286.3" / "0.0": explicit plus for positives, true minus for negatives. */
+    /** "+164.70" / "\u221286.30" / "0.00": explicit plus for positives, true minus for negatives. */
     fun formatSigned(value: Double, decimals: Int): String {
         val rounded = formatNumber(abs(value), decimals)
         val isZero = rounded.all { it == '0' || it == '.' }
@@ -575,7 +574,6 @@ object NowScreenReducer {
 
     private fun formatCapacity(capacityAh: Double, hasValues: Boolean): String = when {
         !hasValues || capacityAh <= 0.0 -> KmfNumberText.MISSING
-        capacityAh == capacityAh.roundToInt().toDouble() -> capacityAh.roundToInt().toString()
-        else -> formatNumber(capacityAh, 1)
+        else -> formatNumber(capacityAh, 2)
     }
 }

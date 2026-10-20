@@ -120,8 +120,8 @@ def _render_metrics(frame) -> None:
     cards[2].metric("Energy in", f"{summary['energy_in_kwh']:.3f} kWh")
     cards[3].metric("Energy out", f"{summary['energy_out_kwh']:.3f} kWh")
     cards = st.columns(4)
-    cards[0].metric("Average power", f"{summary['average_power_w']:.1f} W")
-    cards[1].metric("Power range", f"{summary['minimum_power_w']:.1f} to {summary['maximum_power_w']:.1f} W")
+    cards[0].metric("Average power", f"{summary['average_power_w']:.2f} W")
+    cards[1].metric("Power range", f"{summary['minimum_power_w']:.2f} to {summary['maximum_power_w']:.2f} W")
     cards[2].metric("Voltage range", f"{summary['minimum_voltage_v']:.2f} to {summary['maximum_voltage_v']:.2f} V")
     cards[3].metric("Net energy", f"{summary['net_energy_kwh']:+.3f} kWh")
 

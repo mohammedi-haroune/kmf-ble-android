@@ -27,11 +27,11 @@ enum class TrendsMetric(
     val signed: Boolean,
     val fullName: String,
 ) {
-    Power("Power", "W", 0, true, "Power"),
-    Soc("SoC", "%", 0, false, "State of charge"),
+    Power("Power", "W", 2, true, "Power"),
+    Soc("SoC", "%", 2, false, "State of charge"),
     Voltage("Voltage", "V", 2, false, "Voltage"),
-    Current("Current", "A", 1, true, "Current"),
-    Capacity("Capacity", "Ah", 1, false, "Capacity"),
+    Current("Current", "A", 2, true, "Current"),
+    Capacity("Capacity", "Ah", 2, false, "Capacity"),
 }
 
 /** Everything the ViewModel loads for one range; the reducer turns it into [TrendsScreenState]. */
@@ -226,12 +226,11 @@ object TrendsScreenReducer {
         )
     }
 
-    /** "/ 200" for the Capacity value line; null when the meter capacity is unknown. */
+    /** "/ 200.00" for the Capacity value line; null when the meter capacity is unknown. */
     private fun capacitySuffix(latest: KmfBatterySampleEntity?, locale: Locale): String? {
         val capacity = latest?.capacityAh ?: return null
         if (!(capacity > 0.0)) return null
-        val whole = String.format(locale, "%.1f", capacity).endsWith(".0")
-        return "/ " + String.format(locale, if (whole) "%.0f" else "%.1f", capacity)
+        return "/ " + String.format(locale, "%.2f", capacity)
     }
 
     private fun metricOf(metric: TrendsMetric, sample: KmfBatterySampleEntity): Double = when (metric) {
