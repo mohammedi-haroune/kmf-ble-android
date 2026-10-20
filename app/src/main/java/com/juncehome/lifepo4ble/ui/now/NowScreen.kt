@@ -631,6 +631,8 @@ private fun DataLinkCard(link: NowDataLink) {
         ) {
             Text("Data link", style = MaterialTheme.typography.bodySmall, color = colors.textSecondary)
             val statColor = if (link.statTone == NowTone.Neutral) colors.textSecondary else link.statTone.accent().accent
+            // Ticks and rail both run right up to the state text, which keeps its right edge
+            // (user choice: the strip follows the label length instead of a fixed slot).
             val rail = link.rail
             if (rail == null) {
                 LinkTicks(
@@ -641,35 +643,24 @@ private fun DataLinkCard(link: NowDataLink) {
                         .weight(1f)
                         .semantics { contentDescription = "Frames received over the last 30 seconds: ${link.stat}" },
                 )
-                // Fixed width so the tick strip never shifts when the label changes.
-                Text(
-                    text = link.stat,
-                    modifier = Modifier.width(DataLinkStatWidth),
-                    style = KmfTheme.numbers.small,
-                    color = statColor,
-                    maxLines = 1,
-                    textAlign = TextAlign.End,
-                )
             } else {
-                // Link down: the rail runs right up to the state text, which keeps its right edge.
                 LinkRail(
                     rail = rail,
                     modifier = Modifier
                         .weight(1f)
                         .semantics { contentDescription = "Data link: ${link.stat}" },
                 )
-                Text(
-                    text = link.stat,
-                    style = KmfTheme.numbers.small,
-                    color = statColor,
-                    maxLines = 1,
-                )
             }
+            Text(
+                text = link.stat,
+                style = KmfTheme.numbers.small,
+                color = statColor,
+                maxLines = 1,
+            )
         }
     }
 }
 
-private val DataLinkStatWidth = 112.dp
 private val DataLinkHeight = 32.dp
 private val DataLinkRadius = 12.dp
 
