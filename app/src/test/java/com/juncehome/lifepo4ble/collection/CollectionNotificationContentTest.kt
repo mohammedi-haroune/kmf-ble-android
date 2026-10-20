@@ -8,9 +8,10 @@ class CollectionNotificationContentTest {
     private val discharging = NotificationReading(
         timestampMs = 1_000L,
         voltageV = 13.28,
-        currentA = -0.08,
-        powerW = -1.0624,
+        currentA = -4.1,
+        powerW = -54.448,
         charging = false,
+        minutesRemaining = 2_343,
         socPercent = 89.177,
         remainingAh = 160.156,
         capacityAh = 180.0,
@@ -20,57 +21,71 @@ class CollectionNotificationContentTest {
         CollectionState(phase = phase, visibility = CollectionVisibility.entries.first(), error = error)
 
     @Test
-    fun collectingShowsDirectionSocAndValues() {
+    fun dischargingShowsSignedValuesAndTimeLeft() {
         val content = CollectionNotificationContent.from(state(CollectionPhase.COLLECTING), discharging, NOW)
 
         assertEquals("Discharging · 89% · 160.2 / 180 Ah", content.title)
-        assertEquals("13.28 V · 0.08 A · 1.1 W", content.text)
-        assertEquals(1_000L, content.whenMs)
+        assertEquals("13.28 V · -4.10 A · -54.4 W", content.text)
+        assertEquals("1d 15h left", content.subText)
     }
 
     @Test
-    fun chargingAboveIdleThresholdShowsCharging() {
-        val charging = discharging.copy(currentA = 4.1, powerW = 54.4, charging = true)
+    fun chargingShowsUnsignedValuesAndTimeToFull() {
+        val charging = discharging.copy(currentA = 4.1, powerW = 54.4, charging = true, minutesRemaining = 113)
 
         val content = CollectionNotificationContent.from(state(CollectionPhase.COLLECTING), charging, NOW)
 
         assertEquals("Charging · 89% · 160.2 / 180 Ah", content.title)
         assertEquals("13.28 V · 4.10 A · 54.4 W", content.text)
+        assertEquals("1h 53m to full", content.subText)
     }
 
     @Test
-    fun nearZeroCurrentShowsIdle() {
-        val idle = discharging.copy(currentA = 0.01, powerW = 0.1)
+    fun nearZeroCurrentShowsIdleUnsignedWithoutTime() {
+        val idle = discharging.copy(currentA = -0.01, powerW = -0.1)
 
         val content = CollectionNotificationContent.from(state(CollectionPhase.COLLECTING), idle, NOW)
 
         assertEquals("Idle · 89% · 160.2 / 180 Ah", content.title)
+        assertEquals("13.28 V · 0.01 A · 0.1 W", content.text)
+        assertNull(content.subText)
+    }
+
+    @Test
+    fun missingEstimateHidesTimeLeft() {
+        val content = CollectionNotificationContent.from(
+            state(CollectionPhase.COLLECTING),
+            discharging.copy(minutesRemaining = 0),
+            NOW,
+        )
+
+        assertNull(content.subText)
     }
 
     @Test
     fun collectingWithoutSampleNeverShowsZeroSoc() {
         val content = CollectionNotificationContent.from(state(CollectionPhase.COLLECTING), null, NOW)
 
-        assertEquals("Collecting battery data", content.title)
-        assertEquals("Waiting for the first full reading", content.text)
-        assertNull(content.whenMs)
+        assertEquals("Connecting", content.title)
+        assertEquals("No reading yet", content.text)
+        assertNull(content.subText)
     }
 
     @Test
-    fun notCollectingShowsStatusAndLastReading() {
+    fun notCollectingShowsStateWordSocCapacityAndLastValues() {
         val content = CollectionNotificationContent.from(state(CollectionPhase.WAITING_FOR_DEVICE), discharging, NOW)
 
-        assertEquals("Meter is out of range", content.title)
-        assertEquals("Last: 89% · 13.28 V", content.text)
+        assertEquals("Out of range · 89% · 160.2 / 180 Ah", content.title)
+        assertEquals("Last: 13.28 V · -4.10 A · -54.4 W", content.text)
+        assertNull(content.subText)
     }
 
     @Test
-    fun errorWithoutSampleShowsErrorAndNoReading() {
+    fun errorWithoutSampleShowsPausedAndNoReading() {
         val content = CollectionNotificationContent.from(state(CollectionPhase.ERROR, error = "GATT 133"), null, NOW)
 
-        assertEquals("Collection paused: GATT 133", content.title)
+        assertEquals("Paused", content.title)
         assertEquals("No reading yet", content.text)
-        assertNull(content.whenMs)
     }
 
     @Test
@@ -81,8 +96,16 @@ class CollectionNotificationContentTest {
             discharging.timestampMs + 61_000L,
         )
 
-        assertEquals("Collecting battery data", content.title)
-        assertEquals("Last: 89% · 13.28 V", content.text)
+        assertEquals("Collecting · 89% · 160.2 / 180 Ah", content.title)
+        assertEquals("Last: 13.28 V · -4.10 A · -54.4 W", content.text)
+        assertNull(content.subText)
+    }
+
+    @Test
+    fun stateWordsAreShort() {
+        assertEquals("Connecting", CollectionNotificationContent.stateWord(state(CollectionPhase.BOOTSTRAPPING)))
+        assertEquals("Bluetooth off", CollectionNotificationContent.stateWord(state(CollectionPhase.BLUETOOTH_OFF)))
+        assertEquals("Stopped", CollectionNotificationContent.stateWord(state(CollectionPhase.STOPPED)))
     }
 
     @Test
