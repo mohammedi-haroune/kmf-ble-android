@@ -82,7 +82,7 @@ data class TrendsScreenState(
     val nowValue: String,
     val unit: String,
     val nowLabel: String,
-    /** Unit text after the value, e.g. "W" or "/ 200 Ah" for Capacity. */
+    /** Unit text after the value, e.g. "W" or "Ah". */
     val nowUnitText: String,
     /** Right-aligned caption of the value line, e.g. "Power - now". */
     val metricCaption: String,
@@ -174,7 +174,6 @@ object TrendsScreenReducer {
         val live = window?.atNow == true
         val steppable = range != TrendsRange.Custom
         val nowLabel = if (live) "now" else "latest"
-        val capacitySuffix = if (metric == TrendsMetric.Capacity) capacitySuffix(data?.latest, locale) else null
         val customRange = if (range == TrendsRange.Custom && window != null) {
             TrendsCustomRange(window.startMs, window.endMs)
         } else {
@@ -193,7 +192,7 @@ object TrendsScreenReducer {
             nowValue = nowValue,
             unit = metric.unit,
             nowLabel = nowLabel,
-            nowUnitText = if (capacitySuffix != null) "$capacitySuffix ${metric.unit}" else metric.unit,
+            nowUnitText = metric.unit,
             metricCaption = "${metric.fullName} - $nowLabel",
             yTicks = if (points.isEmpty()) emptyList() else TrendChartMath.niceYTicks(yMin, yMax),
             axisTicks = if (window == null) emptyList() else TrendsWindows.axisTicks(window, zone, locale),
@@ -224,14 +223,6 @@ object TrendsScreenReducer {
             nowMs = now ?: 0L,
             earliestMs = earliest,
         )
-    }
-
-    /** "/ 200" for the Capacity value line; null when the meter capacity is unknown. */
-    private fun capacitySuffix(latest: KmfBatterySampleEntity?, locale: Locale): String? {
-        val capacity = latest?.capacityAh ?: return null
-        if (!(capacity > 0.0)) return null
-        val whole = String.format(locale, "%.1f", capacity).endsWith(".0")
-        return "/ " + String.format(locale, if (whole) "%.0f" else "%.1f", capacity)
     }
 
     private fun metricOf(metric: TrendsMetric, sample: KmfBatterySampleEntity): Double = when (metric) {

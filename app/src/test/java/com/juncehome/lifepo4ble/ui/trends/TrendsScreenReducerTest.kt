@@ -287,7 +287,7 @@ class TrendsScreenReducerTest {
     }
 
     @Test
-    fun capacityMetricUsesRemainingAhAndShowsCapacitySuffix() {
+    fun capacityMetricUsesRemainingAhWithoutTotal() {
         val latest = sample().copy(remainingAh = 164.0, capacityAh = 200.0)
         val rows = listOf(
             row(1, now - 2000).copy(avgRemainingAh = 160.0, minRemainingAh = 158.0, maxRemainingAh = 162.0),
@@ -295,16 +295,12 @@ class TrendsScreenReducerTest {
         )
         val state = reduce(metric = TrendsMetric.Capacity, data = data(buckets = rows, latest = latest))
         assertEquals("164.0", state.nowValue)
-        assertEquals("/ 200 Ah", state.nowUnitText)
+        assertEquals("Ah", state.nowUnitText)
         assertEquals("Capacity - now", state.metricCaption)
         assertEquals("158.0 Ah", state.minText)
         assertEquals("165.0 Ah", state.maxText)
         assertEquals(listOf(160.0, 164.0), state.points.map { it.value })
         assertEquals("Ah", state.unit)
-        val fractional = reduce(metric = TrendsMetric.Capacity, data = data(latest = latest.copy(capacityAh = 100.5)))
-        assertEquals("/ 100.5 Ah", fractional.nowUnitText)
-        val unknown = reduce(metric = TrendsMetric.Capacity, data = data(latest = latest.copy(capacityAh = 0.0)))
-        assertEquals("Ah", unknown.nowUnitText)
     }
 
     @Test
