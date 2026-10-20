@@ -31,7 +31,9 @@ If `gradlew` does not exist yet, create it before relying on project-local Gradl
 
 ## Coding Style & Naming Conventions
 
-Use Kotlin with Jetpack Compose, Material3, Coroutines, Flow/StateFlow, and manual dependency wiring. Source files and identifiers should remain ASCII-only. Prefer small, focused classes with names matching their responsibility, such as `BlePermissionPolicy`, `KmfLineParser`, `GattOperationQueue`, and `BleViewModel`.
+Use Kotlin with Jetpack Compose, Material3, Coroutines, Flow/StateFlow, and manual dependency wiring. Source files and identifiers should remain ASCII-only.
+
+Hard rule: layout never moves when values or states change. Every element keeps one arrangement and position for all values (worst case such as `100.00%`, `--`, negative signs, long durations) and every state (live, stale, syncing, offline, low battery). Size slots for the widest value (fixed widths, tabular mono digits) instead of reflowing, wrapping, or switching between row and stacked layouts at runtime. Large font scale may pick a different layout once, but that choice must not depend on the current value. Prove new UI against worst-case values on the design canvas before implementing. Prefer small, focused classes with names matching their responsibility, such as `BlePermissionPolicy`, `KmfLineParser`, `GattOperationQueue`, and `BleViewModel`.
 
 Do not hardcode observed KMF MAC addresses, service UUIDs, or characteristic UUIDs in app logic. Treat `planning/resources/kmf.yml` as a behavior reference, not an identifier source.
 Add as much useful logging as practical around BLE discovery, connection state, GATT operations, parsing, persistence, and UI state transitions so failures can be debugged from logs alone.
@@ -80,7 +82,7 @@ For KMF protocol changes, verify both levels:
 ## Cell Watch Design Canvas
 
 - The Cell Watch design canvas (Claude Design artifact https://claude.ai/artifact/8qxHYzF9hc9hYWy9wbQAxm) mirrors the shipped UI. Keep it in sync with the app code.
-- Any change to visible UI (labels, ranges, chips, states, layout, behavior such as which buttons are enabled) must update the matching artboards in the same task, e.g. `G-Trends.dc.html` for the Trends tab, `D-Mix.dc.html` for Now, `F-Device.dc.html` for Device, `N1-Notifications.dc.html` for the collection notification.
+- Any change to visible UI (labels, ranges, chips, states, layout, behavior such as which buttons are enabled) must update the matching artboards in the same task, e.g. `G-Trends.dc.html` for the Trends tab, `O-Orbit.dc.html` and its `O01`-`O11` state boards (page "Now · Orbit cell (locked)") for Now, `F-Device.dc.html` for Device, `N1-Notifications.dc.html` for the collection notification.
 - When the design and the code disagree, the code is what ships: fix the canvas, or ask the user if the difference looks intended. Design explorations live on their own canvas pages and don't count as drift.
 
 ## Commit & Pull Request Guidelines

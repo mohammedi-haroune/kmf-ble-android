@@ -73,6 +73,10 @@ data class KmfNumberStyles(
     val hero: TextStyle = mono(100, 96, tracking = -4.0),
     /** Unit next to the hero number. */
     val heroUnit: TextStyle = mono(36, 40),
+    /** SoC inside the Now orbit ring. */
+    val orbitSoc: TextStyle = mono(72, 72, tracking = -3.0),
+    /** Decimals and "%" next to [orbitSoc]. */
+    val orbitSocUnit: TextStyle = mono(26, 26),
     /** Large secondary value, e.g. voltage or flow power. */
     val large: TextStyle = mono(26, 32),
     val largeUnit: TextStyle = mono(14, 18, FontWeight.Normal),

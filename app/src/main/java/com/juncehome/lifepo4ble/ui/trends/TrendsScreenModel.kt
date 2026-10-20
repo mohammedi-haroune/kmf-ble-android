@@ -27,11 +27,11 @@ enum class TrendsMetric(
     val signed: Boolean,
     val fullName: String,
 ) {
-    Power("Power", "W", 0, true, "Power"),
-    Soc("SoC", "%", 0, false, "State of charge"),
+    Power("Power", "W", 2, true, "Power"),
+    Soc("SoC", "%", 2, false, "State of charge"),
     Voltage("Voltage", "V", 2, false, "Voltage"),
-    Current("Current", "A", 1, true, "Current"),
-    Capacity("Capacity", "Ah", 1, false, "Capacity"),
+    Current("Current", "A", 2, true, "Current"),
+    Capacity("Capacity", "Ah", 2, false, "Capacity"),
 }
 
 /** Everything the ViewModel loads for one range; the reducer turns it into [TrendsScreenState]. */

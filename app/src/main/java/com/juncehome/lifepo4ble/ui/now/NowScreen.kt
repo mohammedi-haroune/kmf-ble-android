@@ -6,7 +6,6 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -15,13 +14,16 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -34,9 +36,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,11 +48,15 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.clipRect
-import androidx.compose.ui.layout.LastBaseline
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -74,7 +82,6 @@ import com.juncehome.lifepo4ble.protocol.KmfReading
 import com.juncehome.lifepo4ble.ui.BleUiState
 import com.juncehome.lifepo4ble.ui.components.Banner
 import com.juncehome.lifepo4ble.ui.components.BannerTone
-import com.juncehome.lifepo4ble.ui.components.EnergyText
 import com.juncehome.lifepo4ble.ui.components.KmfIcons
 import com.juncehome.lifepo4ble.ui.components.ConnectionPill
 import com.juncehome.lifepo4ble.ui.components.screenHeader
@@ -85,7 +92,6 @@ import com.juncehome.lifepo4ble.ui.components.TrendChartMath
 import com.juncehome.lifepo4ble.ui.components.TrendChartYAxisInset
 import com.juncehome.lifepo4ble.ui.components.TrendChartPoint
 import com.juncehome.lifepo4ble.ui.components.ValueWithUnit
-import com.juncehome.lifepo4ble.ui.theme.KmfAccent
 import com.juncehome.lifepo4ble.ui.theme.KmfBleTheme
 import com.juncehome.lifepo4ble.ui.theme.KmfDimens
 import com.juncehome.lifepo4ble.ui.theme.KmfTheme
@@ -97,6 +103,31 @@ private const val TAG = "KMF-BLE"
 /** Data link tick colors from the Now board that are not general theme tokens. */
 private val LinkReceivedDim = Color(0xFF2E5E4A)
 private val LinkOfflineReceived = Color(0xFF2A3038)
+
+/** Orbit hero geometry and the app-logo colors (ic_launcher_foreground.xml). */
+private val OrbitRingAreaHeight = 254.dp
+private val OrbitCenterY = 128.dp
+private val OrbitRadius = 106.dp
+private val OrbitStroke = 20.dp
+private val OrbitGlowRadius = 138.dp
+private val OrbitBoltSize = 20.dp
+/** Angle between a comet's head and each trailing dot, wide enough to stay distinct in motion. */
+private const val OrbitTrailDegrees = 7f
+/** A new comet speed or count must hold this long before the orbit follows it. */
+private const val OrbitSettleMs = 2_000L
+private val OrbitTrack = Color(0xFF24394A)
+private val OrbitGradientStart = Color(0xFF19D3A2)
+private val OrbitGradientEnd = Color(0xFFC6F84A)
+private val OrbitBoltIdle = Color(0xFF3A414B)
+private val OrbitBoltPath = Path().apply {
+    moveTo(57f, 38f)
+    lineTo(45f, 56f)
+    lineTo(53f, 56f)
+    lineTo(50f, 71f)
+    lineTo(63f, 51f)
+    lineTo(55f, 51f)
+    close()
+}
 
 /**
  * Stateful entry for the Now tab: ticks the clock once per second (frame age, reconnect
@@ -168,7 +199,7 @@ fun NowScreen(
             .padding(contentPadding),
     ) {
         // The scrolling column is at least one viewport tall, so the power card can take the
-        // remaining height and TotalsFooter sits at the bottom. Taller content still scrolls.
+        // remaining height and the Data link sits at the bottom. Taller content still scrolls.
         val viewportHeight = maxHeight
         Column(
             modifier = Modifier
@@ -189,11 +220,9 @@ fun NowScreen(
                     onAction = banner.action?.let { action -> { onBannerAction(action) } },
                 )
             }
-            SocSection(model)
-            FlowCard(model.flow)
+            OrbitHero(model)
             PowerChartCard(model.chart, onOpenTrends = onOpenTrends, modifier = Modifier.weight(1f))
             DataLinkCard(model.dataLink)
-            TotalsFooter(model.totalsIn, model.totalsOut)
         }
     }
 }
@@ -242,234 +271,256 @@ private fun NowHeader(
     }
 }
 
+/**
+ * Orbit cell hero (canvas page "Now · Orbit cell (locked)"): a logo ring filled to SoC with
+ * comets circling it, SoC and time left inside, Ah under it, then Power / Current / Voltage.
+ * Every slot has a fixed size so nothing moves between values or states (see AGENTS.md).
+ */
 @Composable
-private fun SocSection(model: NowScreenState, modifier: Modifier = Modifier) {
+private fun OrbitHero(model: NowScreenState, modifier: Modifier = Modifier) {
     val colors = KmfTheme.colors
-    val numbers = KmfTheme.numbers
-    val density = LocalDensity.current
-    val fontScale = density.fontScale
-    // The 100 sp hero is display type: cap its growth so large font sizes do not clip it.
-    val heroScale = if (fontScale > 1f) 1f / fontScale else 1f
-    val heroStyle = numbers.hero.copy(
-        fontSize = numbers.hero.fontSize * heroScale,
-        lineHeight = numbers.hero.lineHeight * heroScale,
-    )
-    val heroUnitStyle = numbers.heroUnit.copy(fontSize = numbers.heroUnit.fontSize * heroScale)
-    val socColor = if (model.lowBattery) colors.error.onTint else colors.textPrimary
-
+    val flow = model.flow
+    val description = buildString {
+        append("State of charge ${model.soc} percent, ${flow.eta}, ")
+        append("${model.ahRemaining} of ${model.ahCapacity} amp hours, ")
+        append("power ${flow.power} watts, current ${flow.current} amps, ${model.voltage} volts")
+        model.lowBatteryDetail?.let { append(". Low battery. $it") }
+    }
     Column(
-        modifier = modifier.semantics(mergeDescendants = true) {
-            contentDescription = "State of charge ${model.soc} percent, ${model.voltage} volts, " +
-                "${model.ahRemaining} of ${model.ahCapacity} amp hours"
-        },
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        val hero: @Composable (Modifier) -> Unit = { mod ->
-            ValueWithUnit(
-                value = model.soc,
-                unit = "%",
-                unitSeparator = "",
-                valueStyle = heroStyle,
-                unitStyle = heroUnitStyle,
-                valueColor = socColor,
-                modifier = mod,
-            )
-        }
-        val details: @Composable (Modifier, Alignment.Horizontal) -> Unit = { mod, align ->
-            Column(modifier = mod, horizontalAlignment = align) {
-                ValueWithUnit(value = model.voltage, unit = "V")
-                Text(
-                    text = buildAnnotatedString {
-                        withStyle(SpanStyle(color = colors.textPrimary)) { append(model.ahRemaining) }
-                        append(" / ${model.ahCapacity} Ah")
-                    },
-                    style = numbers.small.copy(fontSize = 15.sp, lineHeight = 20.sp),
-                    color = colors.textSecondary,
-                    maxLines = 1,
-                )
-            }
-        }
-        if (fontScale > 1.3f) {
-            // Large text: stack so neither value is clipped.
-            hero(Modifier)
-            details(Modifier, Alignment.Start)
-        } else {
-            Row(modifier = Modifier.fillMaxWidth()) {
-                hero(Modifier.alignBy(LastBaseline))
-                Spacer(Modifier.weight(1f))
-                details(Modifier.alignBy(LastBaseline), Alignment.End)
-            }
-        }
-        BatteryBar(fraction = model.socFraction, accent = model.barTone.accent(), low = model.lowBattery)
-        if (model.lowBattery) {
-            LowBatteryRow(model.lowBatteryDetail.orEmpty())
-        }
-    }
-}
-
-@Composable
-private fun BatteryBar(fraction: Float, accent: KmfAccent, low: Boolean) {
-    val colors = KmfTheme.colors
-    val borderColor = if (low) colors.error.accent.copy(alpha = 0.5f) else colors.border
-    val emptyColor = colors.surface2
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        Canvas(
-            modifier = Modifier
-                .weight(1f)
-                .height(28.dp)
-                .border(BorderStroke(2.dp, borderColor), RoundedCornerShape(9.dp))
-                .padding(5.dp),
-        ) {
-            val gap = 3.dp.toPx()
-            val segmentWidth = (size.width - gap * 9) / 10f
-            val radius = CornerRadius(4.dp.toPx())
-            for (index in 0 until 10) {
-                val left = index * (segmentWidth + gap)
-                val fill = (fraction * 10f - index).coerceIn(0f, 1f)
-                drawRoundRect(emptyColor, Offset(left, 0f), Size(segmentWidth, size.height), radius)
-                if (fill > 0f) {
-                    clipRect(left = left, top = 0f, right = left + segmentWidth * fill, bottom = size.height) {
-                        drawRoundRect(accent.accent, Offset(left, 0f), Size(segmentWidth, size.height), radius)
-                    }
-                }
-            }
-        }
-        Box(
-            Modifier
-                .width(5.dp)
-                .height(12.dp)
-                .background(borderColor, RoundedCornerShape(topEnd = 3.dp, bottomEnd = 3.dp)),
-        )
-    }
-}
-
-@Composable
-private fun LowBatteryRow(detail: String) {
-    val colors = KmfTheme.colors
-    Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .background(colors.error.accent.copy(alpha = 0.12f), RoundedCornerShape(KmfDimens.TileRadius))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .semantics(mergeDescendants = true) { contentDescription = description },
     ) {
-        Icon(KmfIcons.Warning, contentDescription = null, tint = colors.error.onTint, modifier = Modifier.size(18.dp))
+        OrbitRing(model, Modifier.fillMaxWidth().height(OrbitRingAreaHeight))
         Text(
             text = buildAnnotatedString {
-                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append("Low battery.") }
-                append(" ")
-                append(detail)
+                withStyle(SpanStyle(color = colors.textPrimary)) { append(model.ahRemaining) }
+                append(" / ${model.ahCapacity} Ah")
             },
-            style = MaterialTheme.typography.bodyMedium,
-            color = colors.error.onTint,
+            style = KmfTheme.numbers.small,
+            color = colors.textSecondary,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            modifier = Modifier.fillMaxWidth().height(20.dp),
         )
+        Spacer(Modifier.height(6.dp))
+        StatStrip(model)
     }
 }
 
 @Composable
-private fun FlowCard(flow: NowFlow) {
+private fun OrbitRing(model: NowScreenState, modifier: Modifier = Modifier) {
     val colors = KmfTheme.colors
-    val accent = flow.tone.accent()
-    val muted = flow.tone == NowTone.Muted
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(KmfDimens.CardRadius),
-        color = if (muted) colors.surface else accent.cardFill,
-        border = BorderStroke(KmfDimens.Hairline, if (muted) colors.hairline else accent.borderSubtle),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            BatteryCellIcon(
-                color = accent.accent,
-                tileColor = if (muted) colors.surface2 else accent.tileFill,
-                animation = flow.animation,
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(flow.label, style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold), color = accent.accent, maxLines = 1)
-                Text(flow.eta, style = MaterialTheme.typography.bodySmall, color = colors.textSecondary, maxLines = 1)
-            }
-            Column(horizontalAlignment = Alignment.End) {
-                ValueWithUnit(value = flow.power, unit = "W")
-                ValueWithUnit(
-                    value = flow.current,
-                    unit = "A",
-                    valueStyle = KmfTheme.numbers.body.copy(fontSize = 15.sp, fontWeight = FontWeight.Medium),
-                    unitStyle = KmfTheme.numbers.small,
-                )
-            }
-        }
-    }
-}
-
-/** Battery outline with 4 cells; a wave runs bottom->top when charging, top->bottom when discharging. */
-@Composable
-private fun BatteryCellIcon(color: Color, tileColor: Color, animation: NowCellAnimation) {
-    val animate = animation != NowCellAnimation.None && !KmfTheme.reduceMotion
-    val progress = if (animate) {
-        val transition = rememberInfiniteTransition(label = "cellWave")
+    val flow = model.flow
+    // Live power wobbles: let speed and comet count settle before the orbit follows a change.
+    val period = rememberSettled(flow.orbitPeriodMs)
+    val cometCount = rememberSettled(flow.cometCount)
+    val moving = period != null && !KmfTheme.reduceMotion
+    val direction = if (flow.animation == NowCellAnimation.DrainWave) -1f else 1f
+    val turn = if (moving) {
+        val transition = rememberInfiniteTransition(label = "orbit")
         val value by transition.animateFloat(
             initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(1_400, easing = LinearEasing), RepeatMode.Restart),
-            label = "cellWaveProgress",
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(tween(period, easing = LinearEasing), RepeatMode.Restart),
+            label = "orbitTurn",
         )
         value
     } else {
         0f
     }
-    Box(
-        modifier = Modifier
-            .size(40.dp)
-            .background(tileColor, RoundedCornerShape(KmfDimens.TileRadius)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Canvas(Modifier.size(width = 18.dp, height = 31.dp)) {
-            val capW = 8.dp.toPx()
-            val capH = 3.dp.toPx()
-            drawRoundRect(color, Offset((size.width - capW) / 2f, 0f), Size(capW, capH), CornerRadius(1.dp.toPx()))
-            val bodyTop = capH + 2.dp.toPx()
-            val stroke = 2.dp.toPx()
-            drawRoundRect(
-                color = color,
-                topLeft = Offset(stroke / 2f, bodyTop + stroke / 2f),
-                size = Size(size.width - stroke, size.height - bodyTop - stroke),
-                cornerRadius = CornerRadius(4.dp.toPx()),
-                style = Stroke(stroke),
-            )
-            val inset = stroke + 2.dp.toPx()
-            val gap = 2.dp.toPx()
-            val innerTop = bodyTop + inset
-            val innerHeight = size.height - innerTop - inset
-            val cellHeight = (innerHeight - gap * 3) / 4f
-            for (index in 0 until 4) {
-                val alpha = when {
-                    !animate -> if (animation == NowCellAnimation.None) (if (index == 0) 0.25f else 0.8f) else 1f
-                    else -> {
-                        // CSS: charge delay (3 - i) * 0.25 s, drain delay i * 0.25 s, 1.4 s period.
-                        val delayFraction = (if (animation == NowCellAnimation.ChargeWave) 3 - index else index) * 0.25f / 1.4f
-                        waveOpacity(((progress - delayFraction) % 1f + 1f) % 1f)
-                    }
-                }
-                drawRoundRect(
-                    color = color.copy(alpha = alpha),
-                    topLeft = Offset(inset, innerTop + index * (cellHeight + gap)),
-                    size = Size(size.width - inset * 2, cellHeight),
-                    cornerRadius = CornerRadius(1.dp.toPx()),
+    val lowColor = colors.error.accent
+    val flowAccent = flow.tone.accent().accent
+    val glowColor = when {
+        period == null -> Color.Transparent
+        model.lowBattery -> lowColor
+        else -> flowAccent
+    }
+    val boltColor = when {
+        !model.hasValues -> OrbitBoltIdle
+        period != null && flow.animation == NowCellAnimation.ChargeWave -> colors.textPrimary
+        else -> colors.textTertiary
+    }
+    val fraction = model.socFraction
+    val showComets = period != null
+    // Ring text is display type: keep its size fixed so large font settings cannot push it into the ring.
+    val fontScale = LocalDensity.current.fontScale
+    val textScale = if (fontScale > 1f) 1f / fontScale else 1f
+    val socStyle = KmfTheme.numbers.orbitSoc.let { it.copy(fontSize = it.fontSize * textScale, lineHeight = it.lineHeight * textScale) }
+    val socUnitStyle = KmfTheme.numbers.orbitSocUnit.let { it.copy(fontSize = it.fontSize * textScale) }
+    val etaStyle = MaterialTheme.typography.bodySmall.let {
+        it.copy(fontSize = 12.sp * textScale, lineHeight = 16.sp * textScale)
+    }
+
+    Box(modifier = modifier, contentAlignment = Alignment.TopCenter) {
+        Canvas(Modifier.fillMaxSize()) {
+            val center = Offset(size.width / 2f, OrbitCenterY.toPx())
+            val radius = OrbitRadius.toPx()
+            val stroke = OrbitStroke.toPx()
+            if (glowColor != Color.Transparent) {
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(glowColor.copy(alpha = 0.24f), glowColor.copy(alpha = 0f)),
+                        center = center,
+                        radius = OrbitGlowRadius.toPx(),
+                    ),
+                    radius = OrbitGlowRadius.toPx(),
+                    center = center,
                 )
             }
+            drawCircle(OrbitTrack, radius = radius, center = center, style = Stroke(stroke))
+            if (model.hasValues && fraction > 0f) {
+                val ringBrush = if (model.lowBattery) {
+                    SolidColor(lowColor)
+                } else {
+                    Brush.linearGradient(
+                        colors = listOf(OrbitGradientStart, OrbitGradientEnd),
+                        start = Offset(center.x - radius, center.y - radius),
+                        end = Offset(center.x + radius, center.y + radius),
+                    )
+                }
+                drawArc(
+                    brush = ringBrush,
+                    startAngle = -90f,
+                    sweepAngle = 360f * fraction.coerceAtMost(0.9999f),
+                    useCenter = false,
+                    topLeft = Offset(center.x - radius, center.y - radius),
+                    size = Size(radius * 2f, radius * 2f),
+                    style = Stroke(stroke, cap = StrokeCap.Round),
+                )
+            }
+            if (showComets) {
+                val dotRadius = 3.2.dp.toPx()
+                for (comet in 0 until cometCount) {
+                    val head = comet * (360f / cometCount) - 8f + turn * direction
+                    for (trail in 0..3) {
+                        val angle = Math.toRadians((head - trail * OrbitTrailDegrees * direction).toDouble())
+                        drawCircle(
+                            color = Color.White.copy(alpha = if (trail == 0) 0.95f else 0.6f - trail * 0.15f),
+                            radius = dotRadius - trail * 0.7.dp.toPx(),
+                            center = Offset(
+                                center.x + radius * kotlin.math.sin(angle).toFloat(),
+                                center.y - radius * kotlin.math.cos(angle).toFloat(),
+                            ),
+                        )
+                    }
+                }
+            }
+            // Logo bolt (108-unit icon grid), centered 58 dp above the ring center.
+            val boltScale = OrbitBoltSize.toPx() / 33f
+            translate(center.x - 54f * boltScale, center.y - 58.dp.toPx() - 54.5f * boltScale) {
+                scale(boltScale, boltScale, pivot = Offset.Zero) {
+                    drawPath(OrbitBoltPath, boltColor)
+                }
+            }
+        }
+        val dot = model.soc.indexOf('.')
+        val whole = if (dot >= 0) model.soc.substring(0, dot) else model.soc
+        val fractionText = if (dot >= 0) model.soc.substring(dot) else ""
+        val unitSpan = SpanStyle(
+            fontFamily = socUnitStyle.fontFamily,
+            fontWeight = socUnitStyle.fontWeight,
+            fontSize = socUnitStyle.fontSize,
+            fontFeatureSettings = socUnitStyle.fontFeatureSettings,
+            letterSpacing = socUnitStyle.letterSpacing,
+        )
+        Text(
+            text = buildAnnotatedString {
+                append(whole)
+                withStyle(unitSpan) { append(fractionText) }
+                withStyle(unitSpan.copy(color = colors.textSecondary)) { append("%") }
+            },
+            style = socStyle,
+            color = if (model.lowBattery) colors.error.onTint else colors.textPrimary,
+            maxLines = 1,
+            // Measured on device: a 72 sp line box 48.5 dp above the ring center puts the digits' ink on it.
+            modifier = Modifier.offset(y = OrbitCenterY - 48.5.dp),
+        )
+        Text(
+            text = flow.eta,
+            style = etaStyle,
+            color = colors.textSecondary,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .offset(y = OrbitCenterY + 41.dp)
+                .width(144.dp)
+                .height(32.dp),
+        )
+    }
+}
+
+/**
+ * [value] once it has held for [OrbitSettleMs]; the first value and a switch to or from null
+ * (orbit starting or stopping) apply at once.
+ */
+@Composable
+private fun <T> rememberSettled(value: T): T {
+    var settled by remember { mutableStateOf(value) }
+    LaunchedEffect(value) {
+        if (settled != null && value != null) delay(OrbitSettleMs)
+        settled = value
+    }
+    return settled
+}
+
+@Composable
+private fun StatStrip(model: NowScreenState) {
+    val colors = KmfTheme.colors
+    val flow = model.flow
+    val powerColor = when {
+        !model.hasValues -> colors.textSecondary
+        model.displayState.isOffline -> colors.textSoft
+        model.lowBattery -> colors.error.accent
+        flow.tone == NowTone.Muted -> colors.textSecondary
+        else -> flow.tone.accent().accent
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp),
+        shape = RoundedCornerShape(KmfDimens.CardRadius),
+        color = colors.surface,
+    ) {
+        Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+            StatCell("POWER", flow.power, "W", powerColor, Modifier.weight(1f))
+            StatDivider()
+            StatCell("CURRENT", flow.current, "A", colors.textPrimary, Modifier.weight(1f))
+            StatDivider()
+            StatCell("VOLTAGE", model.voltage, "V", colors.textPrimary, Modifier.weight(1f))
         }
     }
 }
 
-/** Keyframes 0 %/100 % -> 0.22, 35 % -> 1. */
-private fun waveOpacity(phase: Float): Float = if (phase < 0.35f) {
-    0.22f + (1f - 0.22f) * (phase / 0.35f)
-} else {
-    1f - (1f - 0.22f) * ((phase - 0.35f) / 0.65f)
+@Composable
+private fun StatDivider() {
+    Box(
+        Modifier
+            .fillMaxHeight()
+            .width(KmfDimens.Hairline)
+            .background(KmfTheme.colors.hairline),
+    )
+}
+
+@Composable
+private fun StatCell(label: String, value: String, unit: String, valueColor: Color, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, lineHeight = 12.sp, letterSpacing = 1.5.sp, fontWeight = FontWeight.SemiBold),
+            color = KmfTheme.colors.textTertiary,
+            maxLines = 1,
+        )
+        ValueWithUnit(
+            value = value,
+            unit = unit,
+            valueStyle = KmfTheme.numbers.medium.copy(fontSize = 18.sp, lineHeight = 22.sp),
+            unitStyle = KmfTheme.numbers.mediumUnit.copy(fontSize = 11.sp),
+            valueColor = valueColor,
+        )
+    }
 }
 
 @Composable
@@ -499,19 +550,11 @@ private fun PowerChartCard(chart: NowChart?, onOpenTrends: () -> Unit, modifier:
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Power \u00b7 last 15 min", style = MaterialTheme.typography.bodySmall, color = colors.textSecondary)
+            // Fixed-height row in every state: min on the left, max on the right, empty before data.
+            Row(Modifier.fillMaxWidth().height(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(chart?.let { "min ${it.minLabel}" }.orEmpty(), style = KmfTheme.numbers.small, color = colors.textSecondary, maxLines = 1)
                 Spacer(Modifier.weight(1f))
-                chart?.let {
-                    Text(it.meta, style = KmfTheme.numbers.small, color = colors.textSecondary, maxLines = 1)
-                    Spacer(Modifier.width(4.dp))
-                }
-                Icon(
-                    imageVector = KmfIcons.ChevronRight,
-                    contentDescription = null,
-                    tint = colors.textTertiary,
-                    modifier = Modifier.size(16.dp),
-                )
+                Text(chart?.let { "max ${it.maxLabel}" }.orEmpty(), style = KmfTheme.numbers.small, color = colors.textSecondary, maxLines = 1)
             }
             if (chart == null) {
                 Box(
@@ -553,7 +596,7 @@ private fun PowerChart(chart: NowChart, modifier: Modifier) {
             yMin = -chart.scaleW,
             yMax = chart.scaleW,
             colorMode = TrendChartColorMode.Signed,
-            contentDescription = "Power trend chart, charging above the line, discharging below. ${chart.meta}",
+            contentDescription = "Power trend chart, charging above the line, discharging below. Min ${chart.minLabel}, max ${chart.maxLabel}",
             modifier = Modifier.weight(1f),
             height = null,
             verticalPadding = 8.dp,
@@ -576,12 +619,12 @@ private fun PowerChart(chart: NowChart, modifier: Modifier) {
 private fun DataLinkCard(link: NowDataLink) {
     val colors = KmfTheme.colors
     Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(KmfDimens.CardRadius),
+        modifier = Modifier.fillMaxWidth().height(DataLinkHeight),
+        shape = RoundedCornerShape(DataLinkRadius),
         color = colors.surface,
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier.padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -608,6 +651,8 @@ private fun DataLinkCard(link: NowDataLink) {
 }
 
 private val DataLinkStatWidth = 112.dp
+private val DataLinkHeight = 32.dp
+private val DataLinkRadius = 12.dp
 
 @Composable
 private fun LinkTicks(ticks: List<NowLinkTick>, mode: NowLinkMode, fullHeight: Dp, modifier: Modifier = Modifier) {
@@ -652,27 +697,6 @@ private fun LinkTicks(ticks: List<NowLinkTick>, mode: NowLinkMode, fullHeight: D
                 cornerRadius = CornerRadius(1.dp.toPx()),
             )
         }
-    }
-}
-
-@Composable
-private fun TotalsFooter(totalsIn: EnergyText, totalsOut: EnergyText) {
-    val colors = KmfTheme.colors
-    val mono = KmfTheme.numbers.small
-    Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
-        Text("Meter totals", style = MaterialTheme.typography.bodySmall, color = colors.textSecondary)
-        Spacer(Modifier.weight(1f))
-        Text(
-            text = buildAnnotatedString {
-                append("in ")
-                withStyle(SpanStyle(fontFamily = mono.fontFamily, color = colors.textPrimary)) { append(totalsIn.value) }
-                append(" ${totalsIn.unit} \u00b7 out ")
-                withStyle(SpanStyle(fontFamily = mono.fontFamily, color = colors.textPrimary)) { append(totalsOut.value) }
-                append(" ${totalsOut.unit}")
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = colors.textSecondary,
-        )
     }
 }
 

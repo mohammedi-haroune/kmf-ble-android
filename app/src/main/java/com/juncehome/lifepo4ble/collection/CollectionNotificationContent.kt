@@ -4,7 +4,6 @@ import com.juncehome.lifepo4ble.data.KmfBatterySampleEntity
 import com.juncehome.lifepo4ble.ui.now.NowScreenReducer
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.roundToInt
 
 /** Battery values the collection notification shows; taken only from saved (complete A+B+C) samples. */
 data class NotificationReading(
@@ -91,18 +90,14 @@ data class CollectionNotificationContent(
         }
 
         private fun soc(reading: NotificationReading): String =
-            String.format(Locale.US, "%.0f%%", reading.socPercent.coerceIn(0.0, 100.0))
+            String.format(Locale.US, "%.2f%%", reading.socPercent.coerceIn(0.0, 100.0))
 
-        /** Remaining of full capacity, formatted like the Now tab ("160.2 / 180 Ah"). */
+        /** Remaining of full capacity, formatted like the Now tab ("160.20 / 180.00 Ah"). */
         private fun ah(reading: NotificationReading): String {
-            val remaining = String.format(Locale.US, "%.1f", reading.remainingAh)
+            val remaining = String.format(Locale.US, "%.2f", reading.remainingAh)
             val capacity = reading.capacityAh
             if (capacity <= 0.0) return "$remaining Ah"
-            val capacityText = if (capacity == capacity.roundToInt().toDouble()) {
-                capacity.roundToInt().toString()
-            } else {
-                String.format(Locale.US, "%.1f", capacity)
-            }
+            val capacityText = String.format(Locale.US, "%.2f", capacity)
             return "$remaining / $capacityText Ah"
         }
 
@@ -116,7 +111,7 @@ data class CollectionNotificationContent(
             sign(reading) + String.format(Locale.US, "%.2f A", abs(reading.currentA))
 
         private fun watts(reading: NotificationReading): String =
-            sign(reading) + String.format(Locale.US, "%.1f W", abs(reading.powerW))
+            sign(reading) + String.format(Locale.US, "%.2f W", abs(reading.powerW))
 
         private const val IDLE_CURRENT_A = 0.05
         private const val STALE_READING_MS = 60_000L

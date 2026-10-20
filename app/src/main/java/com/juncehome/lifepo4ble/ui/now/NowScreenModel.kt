@@ -7,7 +7,6 @@ import com.juncehome.lifepo4ble.protocol.KmfReading
 import com.juncehome.lifepo4ble.ui.BleUiState
 import com.juncehome.lifepo4ble.ui.ConnectionState
 import com.juncehome.lifepo4ble.ui.components.BannerTone
-import com.juncehome.lifepo4ble.ui.components.EnergyText
 import com.juncehome.lifepo4ble.ui.components.KmfNumberText
 import com.juncehome.lifepo4ble.ui.components.StatusPillIndicator
 import java.time.Instant
@@ -16,7 +15,8 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.ceil
-import kotlin.math.roundToInt
+import kotlin.math.ln
+import kotlin.math.pow
 
 /** One display state per row of docs/design/README.md "Now tab states". */
 enum class NowDisplayState {
@@ -88,6 +88,10 @@ data class NowFlow(
     val current: String,
     val tone: NowTone,
     val animation: NowCellAnimation,
+    /** One orbit turn of the hero comets; null when they stand still. More watts, shorter turn. */
+    val orbitPeriodMs: Int? = null,
+    /** Comets on the orbit: 5 up to [NowScreenReducer.ORBIT_COMET_KNEE_W], then more with power. */
+    val cometCount: Int = NowScreenReducer.ORBIT_MIN_COMETS,
 )
 
 data class NowChartPoint(
@@ -100,7 +104,10 @@ data class NowChart(
     val points: List<NowChartPoint>,
     /** Symmetric vertical scale in W (zero line sits in the middle). */
     val scaleW: Double,
-    val meta: String,
+    /** "+212.00 W": largest power in the window, shown top-right of the plot. */
+    val maxLabel: String,
+    /** "\u221264.00 W": smallest power in the window, shown bottom-right of the plot. */
+    val minLabel: String,
     /** Red dashed marker at the last point (data stopped). */
     val gapMarker: Boolean,
 ) {
@@ -138,8 +145,6 @@ data class NowScreenState(
     /** Null shows the "Chart starts with the first readings" placeholder. */
     val chart: NowChart?,
     val dataLink: NowDataLink,
-    val totalsIn: EnergyText,
-    val totalsOut: EnergyText,
 )
 
 /**
@@ -156,6 +161,19 @@ object NowScreenReducer {
     const val COMPACT_TICKS = 30
     const val STEADY_MAX_MISSED = 3
     const val DEFAULT_METER_NAME = "KMF Meter"
+    /** Fastest orbit turn; the comets never spin faster than this. */
+    const val ORBIT_MIN_PERIOD_MS = 2_500
+    const val ORBIT_MAX_PERIOD_MS = 12_000
+    const val ORBIT_MIN_COMETS = 5
+    const val ORBIT_MAX_COMETS = 10
+    /** Above this power the speed is near its floor and extra comets show the extra power. */
+    const val ORBIT_COMET_KNEE_W = 250.0
+    private const val ORBIT_LOW_W = 10.0
+    private const val ORBIT_HIGH_W = 600.0
+    private const val ORBIT_SPEED_CURVE = 1.2
+    private const val ORBIT_PERIOD_STEP_MS = 250
+    private const val ORBIT_MIN_POWER_W = 0.5
+    private const val IDLE_LINE = "Cells are napping"
 
     private const val DOT = "\u00b7"
     private const val ELLIPSIS = "\u2026"
@@ -194,10 +212,10 @@ object NowScreenReducer {
             pill = pill(displayState, frameAgeMs, collection, nowMs),
             banner = banner(displayState),
             hasValues = hasValues,
-            soc = if (hasValues) formatNumber(reading.socPercent, 0) else KmfNumberText.MISSING,
+            soc = if (hasValues) formatSoc(reading.socPercent) else KmfNumberText.MISSING,
             socFraction = if (hasValues) (reading.socPercent / 100.0).coerceIn(0.0, 1.0).toFloat() else 0f,
             voltage = if (hasValues) formatNumber(reading.voltageV, 2) else "--.--",
-            ahRemaining = if (hasValues) formatNumber(reading.remainingAh, 1) else KmfNumberText.MISSING,
+            ahRemaining = if (hasValues) formatNumber(reading.remainingAh, 2) else KmfNumberText.MISSING,
             ahCapacity = formatCapacity(reading.capacityAh, hasValues),
             barTone = when {
                 lowBattery -> NowTone.Error
@@ -209,8 +227,6 @@ object NowScreenReducer {
             flow = flow(displayState, reading, hasValues, nowMs, zoneId, lastClock),
             chart = chart(displayState, samples, nowMs),
             dataLink = dataLink(displayState, state, nowMs, frameAgeMs),
-            totalsIn = if (hasValues) KmfNumberText.energy(reading.chargeKwh) else EnergyText.MISSING,
-            totalsOut = if (hasValues) KmfNumberText.energy(reading.dischargeKwh) else EnergyText.MISSING,
         )
     }
 
@@ -380,7 +396,7 @@ object NowScreenReducer {
             )
         }
         val tone = flowTone(reading)
-        val power = formatSigned(reading.powerW, 1)
+        val power = formatSigned(reading.powerW, 2)
         val current = formatSigned(reading.currentA, 2)
         val liveAnimation = when (tone) {
             NowTone.Charge -> NowCellAnimation.ChargeWave
@@ -402,18 +418,47 @@ object NowScreenReducer {
             }
             else -> {
                 label = directionLabel(reading)
-                eta = formatEta(reading.minutesRemaining, nowMs, zoneId) ?: "Estimate unavailable"
+                eta = formatLiveEta(reading.minutesRemaining, charging = tone == NowTone.Charge, nowMs, zoneId)
+                    ?: if (abs(reading.powerW) < ORBIT_MIN_POWER_W) IDLE_LINE else "Estimate unavailable"
                 if (displayState != NowDisplayState.Stale) animation = liveAnimation
             }
         }
-        return NowFlow(label, eta, power, current, tone, animation)
+        // Comets stand still with no real power flow, even though zero current counts as Charging.
+        val period = if (animation == NowCellAnimation.None || abs(reading.powerW) < ORBIT_MIN_POWER_W) null else orbitPeriodMs(reading.powerW)
+        return NowFlow(label, eta, power, current, tone, animation, period, orbitCometCount(reading.powerW))
     }
 
-    /** "2h 54m \u00b7 17:26" (hours only when non-zero; minutes zero-padded after hours). */
-    fun formatEta(minutesRemaining: Int, nowMs: Long, zoneId: ZoneId): String? {
+    /**
+     * Orbit turn time for [powerW]. It falls evenly on a log scale, from 12 s at 10 W to the
+     * 2.5 s floor at 600 W (eased by [ORBIT_SPEED_CURVE]), and is rounded to 250 ms steps so
+     * small power changes do not restart the animation.
+     */
+    fun orbitPeriodMs(powerW: Double): Int {
+        val watts = maxOf(1.0, abs(powerW))
+        val position = (ln(watts / ORBIT_LOW_W) / ln(ORBIT_HIGH_W / ORBIT_LOW_W)).coerceIn(0.0, 1.0)
+        val span = (ORBIT_MAX_PERIOD_MS - ORBIT_MIN_PERIOD_MS).toDouble()
+        val raw = ORBIT_MIN_PERIOD_MS + span * (1.0 - position).pow(ORBIT_SPEED_CURVE)
+        return (Math.round(raw / ORBIT_PERIOD_STEP_MS) * ORBIT_PERIOD_STEP_MS).toInt()
+    }
+
+    /** 5 comets up to 250 W, then one more per log step of power, up to 10 at 600 W and above. */
+    fun orbitCometCount(powerW: Double): Int {
+        val watts = abs(powerW)
+        if (watts <= ORBIT_COMET_KNEE_W) return ORBIT_MIN_COMETS
+        val extra = (ORBIT_MAX_COMETS - ORBIT_MIN_COMETS) * ln(watts / ORBIT_COMET_KNEE_W) / ln(ORBIT_HIGH_W / ORBIT_COMET_KNEE_W)
+        return (ORBIT_MIN_COMETS + Math.round(extra).toInt()).coerceAtMost(ORBIT_MAX_COMETS)
+    }
+
+    /** "82.40", or plain "100" when full so the hero shows "100%" without decimals. */
+    fun formatSoc(socPercent: Double): String =
+        if (socPercent >= 99.995) "100" else formatNumber(socPercent, 2)
+
+    /** "2h 54m to full \u00b7 17:26" while charging, "6h 10m left \u00b7 20:42" while discharging. */
+    fun formatLiveEta(minutesRemaining: Int, charging: Boolean, nowMs: Long, zoneId: ZoneId): String? {
         if (minutesRemaining <= 0) return null
         val clock = formatClock(nowMs + minutesRemaining * 60_000L, zoneId)
-        return "${formatDuration(minutesRemaining)} $DOT $clock"
+        val direction = if (charging) "to full" else "left"
+        return "${formatDuration(minutesRemaining)} $direction $DOT $clock"
     }
 
     /** Two levels max: "45m", "2h 54m", "4d 0h", "2w 6d", "1mo 5d", "2y 3mo". Months 30d, years 365d. */
@@ -452,11 +497,11 @@ object NowScreenReducer {
         val max = inWindow.maxOf { it.powerW }
         val min = inWindow.minOf { it.powerW }
         val scale = maxOf(abs(max), abs(min), 1.0)
-        val meta = "max ${formatSigned(max, 0)} $DOT min ${formatSigned(min, 0)} W"
         return NowChart(
             points = points,
             scaleW = scale,
-            meta = meta,
+            maxLabel = "${formatSigned(max, 2)} W",
+            minLabel = "${formatSigned(min, 2)} W",
             gapMarker = displayState.isOffline,
         )
     }
@@ -559,7 +604,7 @@ object NowScreenReducer {
         }
     }
 
-    /** "+164.7" / "\u221286.3" / "0.0": explicit plus for positives, true minus for negatives. */
+    /** "+164.70" / "\u221286.30" / "0.00": explicit plus for positives, true minus for negatives. */
     fun formatSigned(value: Double, decimals: Int): String {
         val rounded = formatNumber(abs(value), decimals)
         val isZero = rounded.all { it == '0' || it == '.' }
@@ -575,7 +620,6 @@ object NowScreenReducer {
 
     private fun formatCapacity(capacityAh: Double, hasValues: Boolean): String = when {
         !hasValues || capacityAh <= 0.0 -> KmfNumberText.MISSING
-        capacityAh == capacityAh.roundToInt().toDouble() -> capacityAh.roundToInt().toString()
-        else -> formatNumber(capacityAh, 1)
+        else -> formatNumber(capacityAh, 2)
     }
 }

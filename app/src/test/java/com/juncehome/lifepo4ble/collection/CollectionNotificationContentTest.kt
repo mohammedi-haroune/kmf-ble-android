@@ -24,8 +24,8 @@ class CollectionNotificationContentTest {
     fun dischargingShowsSignedValuesAndTimeLeft() {
         val content = CollectionNotificationContent.from(state(CollectionPhase.COLLECTING), discharging, NOW)
 
-        assertEquals("Discharging · 89% · 160.2 / 180 Ah", content.title)
-        assertEquals("13.28 V · -4.10 A · -54.4 W", content.text)
+        assertEquals("Discharging · 89.18% · 160.16 / 180.00 Ah", content.title)
+        assertEquals("13.28 V · -4.10 A · -54.45 W", content.text)
         assertEquals("1d 15h left", content.subText)
     }
 
@@ -35,8 +35,8 @@ class CollectionNotificationContentTest {
 
         val content = CollectionNotificationContent.from(state(CollectionPhase.COLLECTING), charging, NOW)
 
-        assertEquals("Charging · 89% · 160.2 / 180 Ah", content.title)
-        assertEquals("13.28 V · 4.10 A · 54.4 W", content.text)
+        assertEquals("Charging · 89.18% · 160.16 / 180.00 Ah", content.title)
+        assertEquals("13.28 V · 4.10 A · 54.40 W", content.text)
         assertEquals("1h 53m to full", content.subText)
     }
 
@@ -46,8 +46,8 @@ class CollectionNotificationContentTest {
 
         val content = CollectionNotificationContent.from(state(CollectionPhase.COLLECTING), idle, NOW)
 
-        assertEquals("Idle · 89% · 160.2 / 180 Ah", content.title)
-        assertEquals("13.28 V · 0.01 A · 0.1 W", content.text)
+        assertEquals("Idle · 89.18% · 160.16 / 180.00 Ah", content.title)
+        assertEquals("13.28 V · 0.01 A · 0.10 W", content.text)
         assertNull(content.subText)
     }
 
@@ -75,8 +75,8 @@ class CollectionNotificationContentTest {
     fun notCollectingShowsStateWordSocCapacityAndLastValues() {
         val content = CollectionNotificationContent.from(state(CollectionPhase.WAITING_FOR_DEVICE), discharging, NOW)
 
-        assertEquals("Out of range · 89% · 160.2 / 180 Ah", content.title)
-        assertEquals("Last: 13.28 V · -4.10 A · -54.4 W", content.text)
+        assertEquals("Out of range · 89.18% · 160.16 / 180.00 Ah", content.title)
+        assertEquals("Last: 13.28 V · -4.10 A · -54.45 W", content.text)
         assertNull(content.subText)
     }
 
@@ -96,8 +96,8 @@ class CollectionNotificationContentTest {
             discharging.timestampMs + 61_000L,
         )
 
-        assertEquals("Collecting · 89% · 160.2 / 180 Ah", content.title)
-        assertEquals("Last: 13.28 V · -4.10 A · -54.4 W", content.text)
+        assertEquals("Collecting · 89.18% · 160.16 / 180.00 Ah", content.title)
+        assertEquals("Last: 13.28 V · -4.10 A · -54.45 W", content.text)
         assertNull(content.subText)
     }
 
@@ -109,7 +109,7 @@ class CollectionNotificationContentTest {
     }
 
     @Test
-    fun fractionalCapacityKeepsOneDecimalAndMissingCapacityShowsRemainingOnly() {
+    fun fractionalCapacityKeepsTwoDecimalsAndMissingCapacityShowsRemainingOnly() {
         val fractional = CollectionNotificationContent.from(
             state(CollectionPhase.COLLECTING),
             discharging.copy(capacityAh = 100.5),
@@ -121,8 +121,8 @@ class CollectionNotificationContentTest {
             NOW,
         )
 
-        assertEquals("Discharging · 89% · 160.2 / 100.5 Ah", fractional.title)
-        assertEquals("Discharging · 89% · 160.2 Ah", missing.title)
+        assertEquals("Discharging · 89.18% · 160.16 / 100.50 Ah", fractional.title)
+        assertEquals("Discharging · 89.18% · 160.16 Ah", missing.title)
     }
 
     @Test
@@ -133,7 +133,7 @@ class CollectionNotificationContentTest {
             NOW,
         )
 
-        assertEquals("Discharging · 100% · 160.2 / 180 Ah", content.title)
+        assertEquals("Discharging · 100.00% · 160.16 / 180.00 Ah", content.title)
     }
 
     private companion object {

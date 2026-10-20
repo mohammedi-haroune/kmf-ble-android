@@ -139,9 +139,9 @@ class TrendsScreenReducerTest {
             row(2, now - 1000, count = 3, power = Triple(5.0, 40.0, 80.0)),
         )
         val state = reduce(data = data(buckets = rows))
-        assertEquals("${minus}20 W", state.minText)
-        assertEquals("+30 W", state.avgText)
-        assertEquals("+80 W", state.maxText)
+        assertEquals("${minus}20.00 W", state.minText)
+        assertEquals("+30.00 W", state.avgText)
+        assertEquals("+80.00 W", state.maxText)
     }
 
     @Test
@@ -207,20 +207,20 @@ class TrendsScreenReducerTest {
         val rows = listOf(row(1, now - 2000, power = Triple(5.0, 5.0, 5.0)), row(2, now - 1000, power = Triple(-7.0, -7.0, -7.0)))
         val high = reduce(data = data(buckets = rows), scrub = 99)
         assertEquals(1, high.scrubIndex)
-        assertEquals("Sun 12:06 $dot ${minus}7 W", high.tooltip)
+        assertEquals("Sun 12:06 $dot ${minus}7.00 W", high.tooltip)
         val low = reduce(data = data(buckets = rows), scrub = -4)
         assertEquals(0, low.scrubIndex)
-        assertEquals("Sun 12:06 $dot +5 W", low.tooltip)
-        assertEquals("12:06:58 $dot +5 W", reduce(TrendsRange.Min15, data = data(buckets = rows), scrub = 0).tooltip)
-        assertEquals("18 Oct $dot +5 W", reduce(TrendsRange.Month, data = data(buckets = rows), scrub = 0).tooltip)
+        assertEquals("Sun 12:06 $dot +5.00 W", low.tooltip)
+        assertEquals("12:06:58 $dot +5.00 W", reduce(TrendsRange.Min15, data = data(buckets = rows), scrub = 0).tooltip)
+        assertEquals("18 Oct $dot +5.00 W", reduce(TrendsRange.Month, data = data(buckets = rows), scrub = 0).tooltip)
         assertNull(reduce(data = data(buckets = rows)).tooltip)
     }
 
     @Test
     fun nowValueFormatsWithoutUnit() {
-        assertEquals("${minus}86", reduce(data = data(latest = sample())).nowValue)
+        assertEquals("${minus}86.30", reduce(data = data(latest = sample())).nowValue)
         assertEquals("13.25", reduce(metric = TrendsMetric.Voltage, data = data(latest = sample())).nowValue)
-        assertEquals("${minus}6.5", reduce(metric = TrendsMetric.Current, data = data(latest = sample())).nowValue)
+        assertEquals("${minus}6.50", reduce(metric = TrendsMetric.Current, data = data(latest = sample())).nowValue)
         assertEquals("W", reduce().unit)
     }
 
@@ -294,11 +294,11 @@ class TrendsScreenReducerTest {
             row(2, now - 1000).copy(avgRemainingAh = 164.0, minRemainingAh = 163.0, maxRemainingAh = 165.0),
         )
         val state = reduce(metric = TrendsMetric.Capacity, data = data(buckets = rows, latest = latest))
-        assertEquals("164.0", state.nowValue)
+        assertEquals("164.00", state.nowValue)
         assertEquals("Ah", state.nowUnitText)
         assertEquals("Capacity - now", state.metricCaption)
-        assertEquals("158.0 Ah", state.minText)
-        assertEquals("165.0 Ah", state.maxText)
+        assertEquals("158.00 Ah", state.minText)
+        assertEquals("165.00 Ah", state.maxText)
         assertEquals(listOf(160.0, 164.0), state.points.map { it.value })
         assertEquals("Ah", state.unit)
     }
