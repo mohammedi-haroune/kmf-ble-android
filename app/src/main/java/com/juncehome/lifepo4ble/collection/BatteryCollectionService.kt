@@ -7,11 +7,19 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
+import com.juncehome.lifepo4ble.AppGraph
 import com.juncehome.lifepo4ble.AppLog
 import com.juncehome.lifepo4ble.BleApplication
 import com.juncehome.lifepo4ble.platform.BluetoothAdapterStateObserver
+import com.juncehome.lifepo4ble.remote.LiveFeedHttpServer
+import com.juncehome.lifepo4ble.remote.LiveFeedHub
+import com.juncehome.lifepo4ble.remote.NetworkAddresses
+import com.juncehome.lifepo4ble.remote.SharingStatus
+import com.juncehome.lifepo4ble.remote.SharingStatusRelay
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
@@ -20,11 +28,15 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import java.io.IOException
+import java.net.BindException
 
 object CollectionServiceAction {
     const val START = "com.juncehome.lifepo4ble.collection.START"
@@ -93,11 +105,15 @@ class BatteryCollectionService : Service() {
     private lateinit var controller: CollectionController
     private lateinit var commandRouter: CollectionServiceCommandRouter
     private lateinit var statusRelay: CollectionStatusRelay
+    private lateinit var sharingRelay: SharingStatusRelay
     private lateinit var bluetoothStateObserver: BluetoothAdapterStateObserver
     private var startedConfiguration: CollectionConfiguration? = null
     private var lastNotifiedPhase: CollectionPhase? = null
     private var lastNotifiedAtMs = 0L
     private var lastNotifiedReading: NotificationReading? = null
+
+    // Main-confined: set while the live feed server runs so onDestroy can stop it before the scope is cancelled.
+    private var sharingServer: LiveFeedHttpServer? = null
 
     @OptIn(ExperimentalCoroutinesApi::class)
     override fun onCreate() {
@@ -121,6 +137,8 @@ class BatteryCollectionService : Service() {
         serviceScope.launch {
             controller.state.collect { state -> statusRelay.publish(state) }
         }
+        sharingRelay = graph.sharingStatusRelay
+        startLiveFeed(graph)
         val historyStore = graph.historyStore
         serviceScope.launch {
             val latestReading = controller.state
@@ -194,11 +212,107 @@ class BatteryCollectionService : Service() {
         bluetoothStateObserver.unregister()
         controller.close()
         statusRelay.publish(controller.state.value)
+        sharingServer?.let { server ->
+            // Socket calls stay off the main thread; stop() is quick and idempotent.
+            runBlocking(Dispatchers.IO) { server.stop() }
+            sharingServer = null
+        }
         serviceScope.cancel()
+        sharingRelay.publish(null)
+        AppLog.d("live feed sharing status cleared on service destroy", TAG)
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /**
+     * The hub always tracks BLE events and controller state while the service runs, so turning sharing on
+     * mid-session still hands a new viewer the replay. The server itself follows the Share on network setting.
+     */
+    private fun startLiveFeed(graph: AppGraph) {
+        val hub = LiveFeedHub()
+        // UNDISPATCHED like the controller: the shared event flow has no replay.
+        serviceScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            graph.bleEvents.collect(hub::onBleEvent)
+        }
+        serviceScope.launch {
+            controller.state.collect(hub::onCollectionState)
+        }
+        serviceScope.launch {
+            graph.shareOnNetwork.distinctUntilChanged().collectLatest { enabled ->
+                AppLog.d("live feed share on network enabled=$enabled", TAG)
+                if (enabled) {
+                    shareLiveFeed(hub)
+                } else {
+                    publishSharing(
+                        SharingStatus(
+                            running = false,
+                            port = LiveFeedHttpServer.DEFAULT_PORT,
+                            addresses = emptyList(),
+                            viewers = 0,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    /** Runs the live feed server until cancelled (setting turned off or service destroyed). */
+    private suspend fun shareLiveFeed(hub: LiveFeedHub) {
+        val server = LiveFeedHttpServer(hub)
+        try {
+            val failure = startServer(server)
+            if (failure != null) {
+                publishSharing(failure)
+                return
+            }
+            sharingServer = server
+            // Republish when viewers come or go, and every minute because addresses change when
+            // NetBird or Wi-Fi reconnects.
+            val refreshTicks = flow {
+                while (true) {
+                    emit(Unit)
+                    delay(SHARING_REFRESH_MS)
+                }
+            }
+            combine(hub.clientCount, refreshTicks) { viewers, _ -> viewers }.collect { viewers ->
+                val addresses = withContext(Dispatchers.IO) { NetworkAddresses.current() }
+                publishSharing(SharingStatus(true, server.boundPort, addresses, viewers))
+            }
+        } finally {
+            sharingServer = null
+            withContext(NonCancellable + Dispatchers.IO) { server.stop() }
+        }
+    }
+
+    /** Binds the server off the main thread; returns the failed status, or null once it is listening. */
+    private suspend fun startServer(server: LiveFeedHttpServer): SharingStatus? = try {
+        withContext(Dispatchers.IO) { server.start(serviceScope) }
+        null
+    } catch (e: BindException) {
+        AppLog.w("live feed server port ${LiveFeedHttpServer.DEFAULT_PORT} is in use: ${e.message}", TAG)
+        failedSharing("Port ${LiveFeedHttpServer.DEFAULT_PORT} is in use")
+    } catch (e: IOException) {
+        AppLog.w("live feed server failed to start: ${e.message}", TAG)
+        failedSharing("Sharing could not start")
+    }
+
+    private fun failedSharing(error: String) = SharingStatus(
+        running = false,
+        port = LiveFeedHttpServer.DEFAULT_PORT,
+        addresses = emptyList(),
+        viewers = 0,
+        error = error,
+    )
+
+    private fun publishSharing(status: SharingStatus) {
+        AppLog.d(
+            "live feed sharing status running=${status.running} port=${status.port} " +
+                "addresses=${status.addresses} viewers=${status.viewers} error=${status.error}",
+            TAG,
+        )
+        sharingRelay.publish(status)
+    }
 
     private fun postNotification(state: CollectionState, reading: NotificationReading?) {
         val content = CollectionNotificationContent.from(state, reading, System.currentTimeMillis())
@@ -233,5 +347,6 @@ class BatteryCollectionService : Service() {
     private companion object {
         const val TAG = "KMF-BLE"
         const val NOTIFICATION_MIN_INTERVAL_MS = 5_000L
+        const val SHARING_REFRESH_MS = 60_000L
     }
 }

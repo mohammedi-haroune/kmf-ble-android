@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- The live feed between the two phones is plain HTTP on a trusted network; authentication/TLS will replace this. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
