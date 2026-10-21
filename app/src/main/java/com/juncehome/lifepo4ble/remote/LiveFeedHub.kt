@@ -27,7 +27,7 @@ class LiveFeedHub(
     private val subscribers = mutableListOf<Channel<LiveFeedMessage>>()
     private val clientCountState = MutableStateFlow(0)
     private var meterName = DEFAULT_METER_NAME
-    private var phase = CollectionPhase.STOPPED
+    private var link = LinkState()
     private var session = Session()
 
     /** Number of connected viewers. */
@@ -48,21 +48,23 @@ class LiveFeedHub(
 
     @Synchronized
     fun onCollectionState(state: CollectionState) {
-        if (state.phase == phase) return
+        val next = LinkState(state.phase, state.error, state.nextReconnectAtMs)
+        if (next == link) return
         val ms = clock()
-        val nextReconnectInMs = state.nextReconnectAtMs?.minus(ms)?.coerceAtLeast(0L)
+        val message = next.toMessage(ms)
         AppLog.d(
-            "live feed link phase=$phase->${state.phase} error=${state.error} " +
-                "nextReconnectInMs=$nextReconnectInMs clients=${subscribers.size}",
+            "live feed link phase=${link.phase}->${next.phase} error=${next.error} " +
+                "nextReconnectInMs=${message.nextReconnectInMs} clients=${subscribers.size}",
             TAG,
         )
-        phase = state.phase
-        publish(LiveFeedMessage.Link(ms, state.phase, state.error, nextReconnectInMs))
+        link = next
+        publish(message)
     }
 
     /**
-     * Opens a viewer stream: [LiveFeedMessage.Hello], then one replay frame per line the viewer needs to rebuild
-     * the home reading, then live messages. A viewer whose catch-up does not fit its buffer is closed right away.
+     * Opens a viewer stream: [LiveFeedMessage.Hello], the current [LiveFeedMessage.Link] (so a viewer joining during
+     * an error still gets the error text and retry delay), one replay frame per line the viewer needs to rebuild the
+     * home reading, then live messages. A viewer whose catch-up does not fit its buffer is closed right away.
      */
     @Synchronized
     fun subscribe(): LiveFeedSubscription {
@@ -70,14 +72,16 @@ class LiveFeedHub(
         val reading = session.readingOrNull()
         val replay = session.replayLines()
         val catchUp = buildList<LiveFeedMessage> {
-            add(LiveFeedMessage.Hello(clock(), meterName, phase))
+            val ms = clock()
+            add(LiveFeedMessage.Hello(ms, meterName, link.phase))
+            add(link.toMessage(ms))
             replay.forEach { add(LiveFeedMessage.Frame(it.ms, it.text, reading, replay = true)) }
         }
         if (catchUp.all { channel.trySend(it).isSuccess }) {
             subscribers.add(channel)
             clientCountState.value = subscribers.size
             AppLog.d(
-                "live feed client subscribed clients=${subscribers.size} phase=$phase " +
+                "live feed client subscribed clients=${subscribers.size} phase=${link.phase} " +
                     "replay=${replay.map { it.text }} readingReady=${reading != null}",
                 TAG,
             )
@@ -96,7 +100,7 @@ class LiveFeedHub(
     fun now(): LiveFeedNow = LiveFeedNow(
         ms = clock(),
         meterName = meterName,
-        phase = phase,
+        phase = link.phase,
         reading = session.readingOrNull(),
         lines = session.lastLines(),
     )
@@ -139,6 +143,20 @@ class LiveFeedHub(
             clientCountState.value = subscribers.size
             AppLog.d("live feed client unsubscribed clients=${subscribers.size}", TAG)
         }
+    }
+
+    /** The last collection state seen from the home phone, reduced to what viewers show. */
+    private data class LinkState(
+        val phase: CollectionPhase = CollectionPhase.STOPPED,
+        val error: String? = null,
+        val nextReconnectAtMs: Long? = null,
+    ) {
+        fun toMessage(ms: Long) = LiveFeedMessage.Link(
+            ms,
+            phase,
+            error,
+            nextReconnectAtMs?.minus(ms)?.coerceAtLeast(0L),
+        )
     }
 
     private class ReplayLine(val text: String, val ms: Long)

@@ -87,6 +87,7 @@ class LiveFeedHubTest {
         assertEquals(
             listOf(
                 LiveFeedMessage.Hello(6_000L, "Meter 7", CollectionPhase.COLLECTING),
+                LiveFeedMessage.Link(6_000L, CollectionPhase.COLLECTING, null, null),
                 LiveFeedMessage.Frame(2_000L, FULL_A_CHARGING, expected, replay = true),
                 LiveFeedMessage.Frame(5_000L, SHORT_A_CHARGING, expected, replay = true),
                 LiveFeedMessage.Frame(3_000L, B, expected, replay = true),
@@ -189,7 +190,10 @@ class LiveFeedHubTest {
         hub.onBleEvent(BleEvent.Connecting(device("New meter")))
 
         assertEquals(
-            listOf<LiveFeedMessage>(LiveFeedMessage.Hello(nowMs, "New meter", CollectionPhase.STOPPED)),
+            listOf<LiveFeedMessage>(
+                LiveFeedMessage.Hello(nowMs, "New meter", CollectionPhase.STOPPED),
+                LiveFeedMessage.Link(nowMs, CollectionPhase.STOPPED, null, null),
+            ),
             drain(hub.subscribe()),
         )
         val now = hub.now()
@@ -213,7 +217,7 @@ class LiveFeedHubTest {
 
         hub.onBleEvent(BleEvent.ServicesDiscovered(GattProfile(UUID(1, 1), UUID(2, 2), UUID(3, 3), false)))
 
-        assertEquals(1, drain(hub.subscribe()).size)
+        assertEquals(2, drain(hub.subscribe()).size)
         assertNull(hub.now().reading)
         assertEquals("Meter 7", hub.now().meterName)
         assertTrue(hub.now().lines.values.all { it == null })
@@ -238,13 +242,67 @@ class LiveFeedHubTest {
         nowMs = 10_000L
 
         hub.onCollectionState(state(CollectionPhase.ERROR, error = "GATT 8", nextReconnectAtMs = 15_000L))
-        hub.onCollectionState(state(CollectionPhase.ERROR, error = "GATT 8", nextReconnectAtMs = 20_000L))
+        hub.onCollectionState(state(CollectionPhase.ERROR, error = "GATT 8", nextReconnectAtMs = 15_000L))
 
         assertEquals(
             listOf<LiveFeedMessage>(LiveFeedMessage.Link(10_000L, CollectionPhase.ERROR, "GATT 8", 5_000L)),
             drain(subscription),
         )
         assertEquals(CollectionPhase.ERROR, hub.now().phase)
+    }
+
+    @Test
+    fun errorRetryWithNewTimeEmitsLink() {
+        val subscription = hub.subscribe()
+        drain(subscription)
+        nowMs = 10_000L
+
+        hub.onCollectionState(state(CollectionPhase.ERROR, error = "GATT 8", nextReconnectAtMs = 15_000L))
+        nowMs = 12_000L
+        hub.onCollectionState(state(CollectionPhase.ERROR, error = "GATT 8", nextReconnectAtMs = 20_000L))
+
+        assertEquals(
+            listOf<LiveFeedMessage>(
+                LiveFeedMessage.Link(10_000L, CollectionPhase.ERROR, "GATT 8", 5_000L),
+                LiveFeedMessage.Link(12_000L, CollectionPhase.ERROR, "GATT 8", 8_000L),
+            ),
+            drain(subscription),
+        )
+    }
+
+    @Test
+    fun errorTextChangeEmitsLink() {
+        val subscription = hub.subscribe()
+        drain(subscription)
+        nowMs = 10_000L
+
+        hub.onCollectionState(state(CollectionPhase.ERROR, error = "GATT 8"))
+        hub.onCollectionState(state(CollectionPhase.ERROR, error = "GATT 133"))
+
+        assertEquals(
+            listOf<LiveFeedMessage>(
+                LiveFeedMessage.Link(10_000L, CollectionPhase.ERROR, "GATT 8", null),
+                LiveFeedMessage.Link(10_000L, CollectionPhase.ERROR, "GATT 133", null),
+            ),
+            drain(subscription),
+        )
+    }
+
+    @Test
+    fun subscribeDuringErrorSendsCurrentLink() {
+        nowMs = 10_000L
+        hub.onCollectionState(state(CollectionPhase.ERROR, error = "GATT 8", nextReconnectAtMs = 15_000L))
+
+        val first = drain(hub.subscribe())
+
+        assertEquals(LiveFeedMessage.Hello(10_000L, "KMF Meter", CollectionPhase.ERROR), first[0])
+        assertEquals(LiveFeedMessage.Link(10_000L, CollectionPhase.ERROR, "GATT 8", 5_000L), first[1])
+        assertEquals(2, first.size)
+
+        nowMs = 12_000L
+        val later = drain(hub.subscribe())
+
+        assertEquals(LiveFeedMessage.Link(12_000L, CollectionPhase.ERROR, "GATT 8", 3_000L), later[1])
     }
 
     @Test
