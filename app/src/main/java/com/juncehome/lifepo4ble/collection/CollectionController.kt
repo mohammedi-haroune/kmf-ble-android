@@ -50,6 +50,8 @@ data class CollectionState(
     val reconnectAttempt: Int = 0,
     /** When the link first dropped in the current failure streak; cleared once collecting again. */
     val linkDroppedAtMs: Long? = null,
+    /** True while the carried phone cannot reach the home phone's live feed; always false for a Bluetooth link. */
+    val remoteUnreachable: Boolean = false,
 )
 
 interface CollectionController {
