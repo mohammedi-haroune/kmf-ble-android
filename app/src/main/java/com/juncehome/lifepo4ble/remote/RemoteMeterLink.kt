@@ -8,6 +8,7 @@ import java.net.URL
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.abs
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -84,10 +85,11 @@ class RemoteMeterLink(
             val current = running
             if (current != null && current.address == address && !current.job.isCompleted) return
             if (current != null) stopLocked()
-            Run(address).also {
+            Run(address).also { run ->
+                val onDeath = CoroutineExceptionHandler { _, cause -> loopDied(run, cause) }
                 // Lazy: the job exists before any of its code runs, so code that runs inline can already stop it.
-                it.job = scope.launch(start = CoroutineStart.LAZY) { runLoop(it) }
-                running = it
+                run.job = scope.launch(onDeath, CoroutineStart.LAZY) { runLoop(run) }
+                running = run
             }
         }
         AppLog.d("remote link start host=${address.display}", TAG)
@@ -110,6 +112,17 @@ class RemoteMeterLink(
         run.job.cancel()
         stateFlow.value = null
         AppLog.d("remote link stop host=${run.address.display}", TAG)
+    }
+
+    /** Last line of defence: if the loop ever dies, the link must not look alive or keep a dead run registered. */
+    private fun loopDied(run: Run, cause: Throwable) {
+        AppLog.e("remote link loop died host=${run.address.display}", cause, TAG)
+        synchronized(lock) {
+            if (running === run) {
+                running = null
+                stateFlow.value = null
+            }
+        }
     }
 
     private suspend fun runLoop(run: Run) {
@@ -147,8 +160,15 @@ class RemoteMeterLink(
     } catch (e: CancellationException) {
         throw e
     } catch (e: IOException) {
-        e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+        e.reason()
+    } catch (e: Exception) {
+        // Not a network failure (the JDK throws a RuntimeException for a port outside 1..65535, for example), but
+        // it must not kill the loop or the process: treat it as the end of this stream and back off.
+        AppLog.e("remote link unexpected error host=${run.address.display}", e, TAG)
+        e.reason()
     }
+
+    private fun Exception.reason(): String = message?.takeIf { it.isNotBlank() } ?: javaClass.simpleName
 
     private fun openConnection(address: RemoteAddress): HttpURLConnection {
         val connection = URL(address.liveUrl).openConnection() as HttpURLConnection

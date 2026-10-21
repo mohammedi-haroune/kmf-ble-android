@@ -17,6 +17,7 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -267,6 +268,40 @@ class RemoteMeterLinkTest {
         link.reconnectNow()
 
         awaitState(link) { it.phase == CollectionPhase.COLLECTING }
+    }
+
+    @Test
+    fun unexpectedExceptionIsRetriedLikeAStreamEnd() = timed {
+        // The JDK throws a RuntimeException, not an IOException, for a port outside 1..65535.
+        val link = newLink()
+
+        link.start(RemoteAddress("127.0.0.1", 70000))
+
+        val failed = awaitState(link) { it.phase == CollectionPhase.ERROR && it.remoteUnreachable }
+        assertNotNull(failed.nextReconnectAtMs)
+        assertTrue(failed.error.orEmpty().isNotBlank())
+        // The loop is alive: it tries again after its backoff and counts the second failure.
+        awaitState(link) { it.reconnectAttempt >= 2 }
+    }
+
+    @Test
+    fun deadLoopClearsStateAndCanBeStartedAgain() = timed {
+        val broken = AtomicBoolean(false)
+        val link = RemoteMeterLink(scope = linkScope, clock = {
+            check(!broken.get()) { "clock broke" }
+            System.currentTimeMillis()
+        }).also { links += it }
+        val address = RemoteAddress("127.0.0.1", 70000)
+        link.start(address)
+        awaitState(link) { it.phase == CollectionPhase.ERROR }
+
+        // The next attempt reads the clock outside the network code, which nothing catches: the loop dies.
+        broken.set(true)
+
+        link.state.first { it == null }
+        broken.set(false)
+        link.start(address)
+        awaitState(link) { it.phase == CollectionPhase.ERROR }
     }
 
     private companion object {
