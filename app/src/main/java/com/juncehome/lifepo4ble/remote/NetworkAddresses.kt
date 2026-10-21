@@ -4,22 +4,27 @@ import com.juncehome.lifepo4ble.AppLog
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.NetworkInterface
-import java.net.SocketException
 
 /** The IPv4 addresses a carried phone can use to reach this phone, Wi-Fi first. */
 object NetworkAddresses {
-    /** Scans the up network interfaces; never throws, an unreadable interface list yields no addresses. */
-    fun current(): List<String> {
+    /**
+     * Scans the up network interfaces; never throws. An unreadable interface list (any failure of [scan], not
+     * only a [java.net.SocketException]) yields no addresses, because the scan runs inside the collection service.
+     */
+    fun current(scan: () -> List<Pair<String, List<InetAddress>>> = ::scanInterfaces): List<String> {
         val interfaces = try {
-            NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
-                .filter { it.isUp }
-                .map { it.name to it.inetAddresses.toList() }
-        } catch (e: SocketException) {
-            AppLog.w("network address scan failed: ${e.message}", TAG)
+            scan()
+        } catch (e: Exception) {
+            AppLog.w("network address scan failed: ${e.javaClass.simpleName}: ${e.message}", TAG)
             return emptyList()
         }
         return select(interfaces)
     }
+
+    private fun scanInterfaces(): List<Pair<String, List<InetAddress>>> =
+        NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+            .filter { it.isUp }
+            .map { it.name to it.inetAddresses.toList() }
 
     /**
      * IPv4 only, without loopback and link-local (169.254.x.x). Keeps the given interface order except that
