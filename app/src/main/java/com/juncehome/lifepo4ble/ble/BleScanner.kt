@@ -36,9 +36,18 @@ class AndroidBleScanner(
         }
 
         val discovered = linkedMapOf<String, ScannedDevice>()
+        // Logged once per address and name so non-meter neighbours do not flood the log.
+        val ignored = hashSetOf<Pair<String, String?>>()
+        fun accept(device: ScannedDevice): Boolean {
+            if (KmfMeterFilter.isKmfMeter(device)) return true
+            if (ignored.add(device.address to device.name)) {
+                AppLog.d("scan ignored non-KMF ${device.address} name=${device.name} rssi=${device.rssi}", "KMF-BLE")
+            }
+            return false
+        }
         val callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
-                result.toScannedDevice()?.let { device ->
+                result.toScannedDevice()?.takeIf(::accept)?.let { device ->
                     AppLog.d("scan result ${device.address} name=${device.name} rssi=${device.rssi}", "KMF-BLE")
                     discovered[device.address] = device
                     trySend(discovered.values.sortedForDisplay())
@@ -48,7 +57,7 @@ class AndroidBleScanner(
             override fun onBatchScanResults(results: MutableList<ScanResult>) {
                 AppLog.d("scan batch size=${results.size}", "KMF-BLE")
                 results.forEach { result ->
-                    result.toScannedDevice()?.let { device ->
+                    result.toScannedDevice()?.takeIf(::accept)?.let { device ->
                         discovered[device.address] = device
                     }
                 }
@@ -103,16 +112,8 @@ class AndroidBleScanner(
 
     private fun Collection<ScannedDevice>.sortedForDisplay(): List<ScannedDevice> =
         sortedWith(
-            compareByDescending<ScannedDevice> { it.name.isLikelyMeterName() }
-                .thenByDescending { it.rssi }
+            compareByDescending<ScannedDevice> { it.rssi }
                 .thenBy { it.name.orEmpty() }
                 .thenBy { it.address }
         )
-
-    private fun String?.isLikelyMeterName(): Boolean {
-        val normalized = this?.uppercase().orEmpty()
-        return normalized.contains("KMF") ||
-            normalized.contains("BTG") ||
-            normalized.contains("CH")
-    }
 }
