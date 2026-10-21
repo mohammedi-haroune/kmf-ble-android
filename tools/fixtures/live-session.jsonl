@@ -1,0 +1,20 @@
+{"event": "frame", "data": {"line": ":A=1331,5200,1,319,152340,1800,"}}
+{"event": "frame", "data": {"line": ":B=1,0,0,0,"}}
+{"event": "frame", "data": {"line": ":C=41200,38900,"}}
+{"event": "frame", "data": {"line": ":A=1332,5200,1,319,152420,1800,"}}
+{"event": "frame", "data": {"line": ":A=1333,5100,1,323,152500,1800,"}}
+{"event": "frame", "data": {"line": ":A=1333,5100,1,323,1,"}}
+{"event": "frame", "data": {"line": ":A=1334,5000,1,328,152580,1800,"}}
+{"event": "frame", "data": {"line": ":C=41210,38900,"}}
+{"event": "frame", "data": {"line": ":A=1320,8400,0,1090,152600,1800,"}}
+{"event": "frame", "data": {"line": ":A=1318,8400,0,1090,152560,1800,"}}
+{"event": "frame", "data": {"line": ":A=1316,8500,0,1076,152500,1800,"}}
+{"event": "frame", "data": {"line": ":A=1306,21000,0,435,152420,1800,"}}
+{"event": "frame", "data": {"line": ":A=1304,21000,0,435,152330,1800,"}}
+{"event": "frame", "data": {"line": ":A=1305,21000,0,435,1,"}}
+{"event": "frame", "data": {"line": ":B=1,0,0,0,"}}
+{"event": "frame", "data": {"line": ":A=1308,12000,0,761,152240,1800,"}}
+{"event": "frame", "data": {"line": ":C=41210,38910,"}}
+{"event": "link", "data": {"phase": "CONNECTING", "error": null, "nextReconnectInMs": null}}
+{"event": "link", "data": {"phase": "COLLECTING", "error": null, "nextReconnectInMs": null}}
+{"event": "frame", "data": {"line": ":A=1311,12000,0,759,1,"}}
