@@ -27,17 +27,31 @@ object NetworkAddresses {
             .map { it.name to it.inetAddresses.toList() }
 
     /**
-     * IPv4 only, without loopback and link-local (169.254.x.x). Keeps the given interface order except that
-     * interfaces named wlan* come first.
+     * IPv4 only, without loopback and link-local (169.254.x.x). The Device tab shows two slots, so the order
+     * decides what a carried phone can try: the Wi-Fi client (wlan0) first, then the VPN (tun*, wt*: NetBird), then
+     * other Wi-Fi, hotspot and access point interfaces, then the rest in the given order. Cellular and translation
+     * interfaces (rmnet, ccmni, v4-*, clat, dummy) are dropped; they are not reachable from another phone and would
+     * otherwise push the VPN address out of the slots.
      */
-    fun select(interfaces: List<Pair<String, List<InetAddress>>>): List<String> {
-        val (wifi, other) = interfaces.partition { (name, _) -> name.startsWith(WIFI_PREFIX) }
-        return (wifi + other)
+    fun select(interfaces: List<Pair<String, List<InetAddress>>>): List<String> =
+        interfaces
+            .filterNot { (name, _) -> DROPPED_PREFIXES.any(name::startsWith) }
+            .sortedBy { (name, _) -> rank(name) }
             .flatMap { (_, addresses) -> addresses }
             .filter { it is Inet4Address && !it.isLoopbackAddress && !it.isLinkLocalAddress }
             .mapNotNull { it.hostAddress }
+
+    /** Lower first; [sortedBy] is stable, so equal ranks keep the kernel order. */
+    private fun rank(name: String): Int = when {
+        name.startsWith(WIFI_CLIENT_PREFIX) -> 0
+        VPN_PREFIXES.any(name::startsWith) -> 1
+        OTHER_WIFI_PREFIXES.any(name::startsWith) -> 2
+        else -> 3
     }
 
-    private const val WIFI_PREFIX = "wlan"
+    private const val WIFI_CLIENT_PREFIX = "wlan0"
+    private val VPN_PREFIXES = listOf("tun", "wt")
+    private val OTHER_WIFI_PREFIXES = listOf("wlan", "swlan", "ap")
+    private val DROPPED_PREFIXES = listOf("rmnet", "r_rmnet", "ccmni", "v4-", "clat", "dummy")
     private const val TAG = "KMF-BLE"
 }
