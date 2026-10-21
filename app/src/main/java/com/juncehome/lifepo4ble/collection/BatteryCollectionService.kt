@@ -108,11 +108,10 @@ class BatteryCollectionService : Service() {
     // adapter broadcasts and its own timers.
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private lateinit var controller: CollectionController
-    private lateinit var commandRouter: CollectionServiceCommandRouter
+    private lateinit var commandRunner: CollectionServiceCommandRunner
     private lateinit var statusRelay: CollectionStatusRelay
     private lateinit var sharingRelay: SharingStatusRelay
     private lateinit var bluetoothStateObserver: BluetoothAdapterStateObserver
-    private var startedConfiguration: CollectionConfiguration? = null
     private var lastNotifiedPhase: CollectionPhase? = null
     private var lastNotifiedAtMs = 0L
     private var lastNotifiedReading: NotificationReading? = null
@@ -134,9 +133,20 @@ class BatteryCollectionService : Service() {
         }
         bluetoothStateObserver.register()
         statusRelay = graph.collectionStatusRelay
-        commandRouter = CollectionServiceCommandRouter(
+        commandRunner = CollectionServiceCommandRunner(
+            scope = serviceScope,
             controller = controller,
-            autonomousCollectionStopper = (application as BleApplication).graph.autonomousCollectionDisabler,
+            router = CollectionServiceCommandRouter(
+                controller = controller,
+                autonomousCollectionStopper = graph.autonomousCollectionDisabler,
+            ),
+            loadConfiguration = { graph.collectionConfiguration.first() },
+            stopService = { startId, leaveForeground ->
+                if (leaveForeground) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                }
+                stopSelf(startId)
+            },
         )
         CollectionNotification.createChannel(this)
         serviceScope.launch {
@@ -180,33 +190,10 @@ class BatteryCollectionService : Service() {
         // ForegroundServiceDidNotStartInTimeException.
         AppLog.d("collection service command action=${intent?.action} startId=$startId", TAG)
         promoteToForeground()
-        if (intent?.action == CollectionServiceAction.STOP) {
-            runBlocking(Dispatchers.IO) {
-                commandRouter.route(CollectionServiceCommand.from(intent))
-            }
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf(startId)
-            return START_NOT_STICKY
-        }
-
-        val configuration = runBlocking(Dispatchers.IO) {
-            (application as BleApplication).graph.collectionConfiguration.first()
-        }
-        if (configuration?.autonomousEnabled != true) {
-            AppLog.w("collection service command ignored without autonomous configuration", TAG)
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf(startId)
-            return START_NOT_STICKY
-        }
-
-        if (startedConfiguration != configuration) {
-            controller.start(configuration)
-            startedConfiguration = configuration
-        }
-        intent?.let {
-            runBlocking { commandRouter.route(CollectionServiceCommand.from(it)) }
-        }
-        return START_STICKY
+        // The command runs later on the service scope: blocking the main thread on it can deadlock with
+        // DataStore. A command ignored there still stops the service, so START_STICKY only lasts while collecting.
+        commandRunner.submit(intent?.let(CollectionServiceCommand::from), startId)
+        return if (intent?.action == CollectionServiceAction.STOP) START_NOT_STICKY else START_STICKY
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
