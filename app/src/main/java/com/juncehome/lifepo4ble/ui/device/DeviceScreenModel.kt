@@ -4,6 +4,7 @@ import com.juncehome.lifepo4ble.collection.CollectionCadence
 import com.juncehome.lifepo4ble.collection.CollectionPhase
 import com.juncehome.lifepo4ble.protocol.FrameLogEntry
 import com.juncehome.lifepo4ble.protocol.PacketDirection
+import com.juncehome.lifepo4ble.remote.RemoteLinkMachine
 import com.juncehome.lifepo4ble.ui.BleUiState
 import com.juncehome.lifepo4ble.ui.ConnectionState
 import com.juncehome.lifepo4ble.ui.firstrun.FirstRunNotice
@@ -47,6 +48,8 @@ data class DeviceMeterCard(
     val showPairButton: Boolean,
     val pairingInProgress: Boolean,
     val meterSaved: Boolean,
+    /** False while the meter is read through another phone: pair, change and forget stay in place but disabled. */
+    val actionsEnabled: Boolean = true,
 )
 
 enum class PermissionKind { Bluetooth, NearbyDevices, Notifications }
@@ -86,10 +89,32 @@ data class DeviceTestCard(
     val lastResult: String?,
 )
 
+/** The Network card: this phone sharing its live feed, and this phone reading another phone's feed. */
+data class DeviceNetworkCard(
+    val shareOn: Boolean,
+    /** False in remote mode: sharing needs this phone's own Bluetooth collection. */
+    val shareEnabled: Boolean,
+    val shareStatus: String,
+    /** Always exactly [DeviceScreenReducer.SHARE_ADDRESS_SLOTS] entries, "--" for a missing one. */
+    val shareAddresses: List<String>,
+    /** "0 viewers", "1 viewer", "12 viewers". */
+    val viewers: String,
+    /** Remote mode is on: the Now tab shows the meter of another phone. */
+    val remoteConnected: Boolean,
+    /** The saved "host:port" in remote mode, "" otherwise. */
+    val remoteAddress: String,
+    val remoteStatus: String,
+    val remoteTone: DeviceTone,
+    /** Why the typed address was refused; null when it is fine. */
+    val remoteError: String?,
+    val note: String,
+)
+
 data class DeviceScreenState(
     val mode: DeviceMode,
     val collection: DeviceCollectionCard,
     val meter: DeviceMeterCard,
+    val network: DeviceNetworkCard,
     val permissions: List<DevicePermissionRow>,
     val test: DeviceTestCard,
 )
@@ -120,6 +145,14 @@ object DeviceScreenReducer {
     const val HINT_IDLE =
         "Connects once for debugging and shows raw frames. Nothing is saved to history, and it does not reconnect."
     const val HINT_RUNNING = "Test connection $DOT raw frames below. Not saved, no automatic reconnect."
+    const val REMOTE_OFF_REASON = "Off while connected through another phone."
+    const val REMOTE_TEST_BLOCKED = "Disconnect from the other phone first."
+    const val NOTE_NO_PASSWORD =
+        "No password yet. Anyone who can reach this phone's address can read its live data (read-only)."
+    const val SHARE_ADDRESS_SLOTS = 2
+    const val SHARE_OFF = "Off"
+    const val SHARE_WAITING = "Waiting for background collection"
+    const val REMOTE_NOT_CONNECTED = "Not connected"
 
     private val TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.US)
     private val DATE_TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM HH:mm", Locale.US)
@@ -133,7 +166,7 @@ object DeviceScreenReducer {
     ): DeviceScreenState {
         val configured = state.autonomousCollectionConfigured
         val paired = state.companionAssociated || configured
-        val testRunning = state.testConnectionActive && state.manualTransportControlsEnabled
+        val testRunning = state.testConnectionActive && state.manualTransportControlsEnabled && !state.remoteMode
         val mode = when {
             testRunning -> DeviceMode.TestRunning
             !paired -> DeviceMode.NotPaired
@@ -144,6 +177,7 @@ object DeviceScreenReducer {
             mode = mode,
             collection = collectionCard(state, paired, nowMs),
             meter = meterCard(state, paired, nowMs, zoneId),
+            network = networkCard(state, nowMs),
             permissions = permissionRows(state, sdkInt, notice),
             test = testCard(state, testRunning, zoneId),
         )
@@ -176,6 +210,19 @@ object DeviceScreenReducer {
     }
 
     private fun collectionCard(state: BleUiState, paired: Boolean, nowMs: Long): DeviceCollectionCard {
+        if (state.remoteMode) {
+            // The carried phone never collects over Bluetooth, so there is nothing to switch on here.
+            return DeviceCollectionCard(
+                on = false,
+                switchEnabled = false,
+                tone = DeviceTone.Neutral,
+                pulse = false,
+                status = STATUS_OFF,
+                detail = REMOTE_OFF_REASON,
+                cadences = null,
+                pairingRequired = false,
+            )
+        }
         val configured = state.autonomousCollectionConfigured
         if (!configured) {
             return DeviceCollectionCard(
@@ -253,7 +300,73 @@ object DeviceScreenReducer {
             pairingInProgress = state.autonomousCollectionStatus ==
                 com.juncehome.lifepo4ble.ui.AutonomousCollectionStatus.SETUP_IN_PROGRESS,
             meterSaved = address != null,
+            actionsEnabled = !state.remoteMode,
         )
+    }
+
+    private fun networkCard(state: BleUiState, nowMs: Long): DeviceNetworkCard {
+        val remote = state.remoteMode
+        // The feed server belongs to this phone's own collection; it does not run while reading another phone.
+        val shareOn = state.shareOnNetwork && !remote
+        val sharing = state.sharingStatus?.takeIf { shareOn }
+        val running = sharing?.takeIf { it.running }
+        val shareError = sharing?.error
+        val shareStatus = when {
+            !shareOn -> SHARE_OFF
+            shareError != null -> shareError
+            running != null -> "Sharing $DOT port ${running.port}"
+            else -> SHARE_WAITING
+        }
+        val addresses = running?.addresses.orEmpty().take(SHARE_ADDRESS_SLOTS)
+        val (remoteStatus, remoteTone) = remoteStatus(state, nowMs)
+        return DeviceNetworkCard(
+            shareOn = shareOn,
+            shareEnabled = !remote,
+            shareStatus = shareStatus,
+            shareAddresses = addresses + List(SHARE_ADDRESS_SLOTS - addresses.size) { MISSING },
+            viewers = viewerLabel(running?.viewers ?: 0),
+            remoteConnected = remote,
+            remoteAddress = state.remoteAddress.orEmpty(),
+            remoteStatus = remoteStatus,
+            remoteTone = remoteTone,
+            remoteError = state.remoteAddressError,
+            note = NOTE_NO_PASSWORD,
+        )
+    }
+
+    private fun viewerLabel(count: Int): String = if (count == 1) "1 viewer" else "$count viewers"
+
+    /**
+     * Link to the home phone. In remote mode [BleUiState.collectionState] is the carried phone's link state: its
+     * phase is the home phone's collection phase, and [CollectionState.remoteUnreachable] marks a lost stream.
+     */
+    private fun remoteStatus(state: BleUiState, nowMs: Long): Pair<String, DeviceTone> {
+        if (!state.remoteMode) return REMOTE_NOT_CONNECTED to DeviceTone.Neutral
+        val link = state.collectionState
+        if (link != null && link.remoteUnreachable) {
+            val retryAt = link.nextReconnectAtMs
+            val label = if (retryAt == null) {
+                "Phone offline"
+            } else {
+                "Phone offline $DOT retry in ${((retryAt - nowMs + 999L) / 1_000L).coerceAtLeast(1L)} s"
+            }
+            return label to DeviceTone.Warning
+        }
+        return when (link?.phase) {
+            // Not started yet (null/STOPPED) counts as connecting: the link starts as soon as the app is visible.
+            null, CollectionPhase.STOPPED, CollectionPhase.CONNECTING -> "Connecting$ELLIPSIS" to DeviceTone.Neutral
+            CollectionPhase.BOOTSTRAPPING, CollectionPhase.COLLECTING -> {
+                val meterName = state.selectedDevice?.name?.takeIf { it.isNotBlank() }?.trim() ?: DEFAULT_METER_NAME
+                "Connected $DOT $meterName" to DeviceTone.Live
+            }
+            CollectionPhase.WAITING_FOR_DEVICE -> "Home phone: meter out of range" to DeviceTone.Neutral
+            CollectionPhase.BLUETOOTH_OFF -> "Home phone: Bluetooth off" to DeviceTone.Warning
+            CollectionPhase.ERROR -> when {
+                link.error == RemoteLinkMachine.HOME_STOPPED_ERROR -> link.error to DeviceTone.Warning
+                link.nextReconnectAtMs != null -> "Home phone reconnecting to meter" to DeviceTone.Warning
+                else -> "Home phone error" + (link.error?.let { " $DOT $it" } ?: "") to DeviceTone.Error
+            }
+        }
     }
 
     /** "14:32:08" for today, "17 Oct 09:15" otherwise. */
@@ -311,6 +424,18 @@ object DeviceScreenReducer {
     }
 
     private fun testCard(state: BleUiState, testRunning: Boolean, zoneId: ZoneId): DeviceTestCard {
+        if (state.remoteMode) {
+            return DeviceTestCard(
+                status = TestConnectionStatus.Idle,
+                hint = HINT_IDLE,
+                connectEnabled = false,
+                blockedReason = REMOTE_TEST_BLOCKED,
+                connectionLabel = null,
+                connected = false,
+                frames = emptyList(),
+                lastResult = state.testConnectionResult,
+            )
+        }
         if (!state.manualTransportControlsEnabled) {
             return DeviceTestCard(
                 status = TestConnectionStatus.Disabled,

@@ -158,17 +158,19 @@ class RemoteLinkMachine(private val address: RemoteAddress) {
     private fun String.forLog(): String =
         if (length <= MAX_LOGGED_ERROR_CHARS) this else take(MAX_LOGGED_ERROR_CHARS) + "..."
 
-    private companion object {
-        const val TAG = "KMF-BLE"
-        const val LINE_TERMINATOR = "\r\n"
+    companion object {
+        /** The [CollectionState.error] of the paused state: the home phone turned collection off on purpose. */
         const val HOME_STOPPED_ERROR = "Collection is off on the home phone"
-        const val PAUSED_RETRY_MS = 15_000L
-        const val MAX_LOGGED_ERROR_CHARS = 200
+
+        private const val TAG = "KMF-BLE"
+        private const val LINE_TERMINATOR = "\r\n"
+        private const val PAUSED_RETRY_MS = 15_000L
+        private const val MAX_LOGGED_ERROR_CHARS = 200
 
         /** 1 s, 2 s, 5 s, then every 15 s. */
-        val RECONNECT_DELAYS_MS = longArrayOf(1_000L, 2_000L, 5_000L, 15_000L)
+        private val RECONNECT_DELAYS_MS = longArrayOf(1_000L, 2_000L, 5_000L, 15_000L)
 
         /** Marks notifications that come from the live feed; it is never a meter characteristic. */
-        val REMOTE_CHARACTERISTIC = UUID(0L, 0L)
+        private val REMOTE_CHARACTERISTIC = UUID(0L, 0L)
     }
 }

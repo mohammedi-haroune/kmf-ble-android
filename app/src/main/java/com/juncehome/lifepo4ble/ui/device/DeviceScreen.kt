@@ -20,6 +20,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
@@ -27,7 +29,10 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchColors
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,15 +52,24 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -67,6 +81,7 @@ import com.juncehome.lifepo4ble.collection.CollectionState
 import com.juncehome.lifepo4ble.collection.CollectionVisibility
 import com.juncehome.lifepo4ble.protocol.PacketDirection
 import com.juncehome.lifepo4ble.protocol.PacketFormatter
+import com.juncehome.lifepo4ble.remote.SharingStatus
 import com.juncehome.lifepo4ble.ui.BleUiState
 import com.juncehome.lifepo4ble.ui.ConnectionState
 import com.juncehome.lifepo4ble.ui.components.ConnectionPill
@@ -90,6 +105,13 @@ import kotlinx.coroutines.delay
 
 private const val TAG = "KMF-BLE"
 
+/** Widest text each fixed slot of the Network card has to hold; the slot keeps this width whatever it shows. */
+private const val WIDEST_VIEWERS = "999 viewers"
+private const val WIDEST_REMOTE_ACTION = "Disconnect"
+
+/** From this font scale on the address field and its button stack; decided by the setting, never by a value. */
+private const val STACKED_FONT_SCALE = 1.3f
+
 /** Everything the Device tab can ask the app to do. */
 data class DeviceCallbacks(
     val onEnableCollection: () -> Unit = {},
@@ -101,6 +123,9 @@ data class DeviceCallbacks(
     val onConnectOnce: () -> Unit = {},
     val onClearLog: () -> Unit = {},
     val onDisconnectTest: () -> Unit = {},
+    val onShareOnNetworkChange: (Boolean) -> Unit = {},
+    val onConnectRemote: (String) -> Unit = {},
+    val onDisconnectRemote: () -> Unit = {},
 )
 
 /** Stateful entry: ticks the clock once per second and reduces [state] into the Device model. */
@@ -125,6 +150,14 @@ fun DeviceRoute(
         AppLog.d(
             "Device: mode=${model.mode} collection='${model.collection.status}' on=${model.collection.on} " +
                 "test=${model.test.status} paired=${model.meter.paired} phase=${state.collectionState?.phase}",
+            TAG,
+        )
+    }
+    LaunchedEffect(model.network.shareStatus, model.network.remoteStatus.substringBefore(" \u00B7 ")) {
+        AppLog.d(
+            "Device: network share='${model.network.shareStatus}' viewers='${model.network.viewers}' " +
+                "remote='${model.network.remoteStatus}' remoteMode=${model.network.remoteConnected} " +
+                "remoteError=${model.network.remoteError != null}",
             TAG,
         )
     }
@@ -171,6 +204,7 @@ fun DeviceScreen(
                 confirmForget = true
             },
         )
+        NetworkCard(model.network, callbacks)
         PermissionsCard(model.permissions, callbacks.onPermissionAction)
         TestConnectionCard(model.test, callbacks)
     }
@@ -251,17 +285,7 @@ private fun CollectionCard(card: DeviceCollectionCard, callbacks: DeviceCallback
                     if (checked) callbacks.onEnableCollection() else callbacks.onDisableCollection()
                 },
                 modifier = Modifier.semantics { contentDescription = "Background collection" },
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = colors.background,
-                    checkedTrackColor = colors.live.accent,
-                    checkedBorderColor = colors.live.accent,
-                    uncheckedThumbColor = colors.neutral.accent,
-                    uncheckedTrackColor = colors.border,
-                    uncheckedBorderColor = colors.border,
-                    disabledUncheckedThumbColor = colors.textTertiary.copy(alpha = 0.5f),
-                    disabledUncheckedTrackColor = colors.surface2,
-                    disabledUncheckedBorderColor = colors.surface2,
-                ),
+                colors = deviceSwitchColors(),
             )
         }
         Text(text = card.detail, style = MaterialTheme.typography.bodySmall, color = colors.textSecondary)
@@ -273,6 +297,22 @@ private fun CollectionCard(card: DeviceCollectionCard, callbacks: DeviceCallback
             }
         }
     }
+}
+
+@Composable
+private fun deviceSwitchColors(): SwitchColors {
+    val colors = KmfTheme.colors
+    return SwitchDefaults.colors(
+        checkedThumbColor = colors.background,
+        checkedTrackColor = colors.live.accent,
+        checkedBorderColor = colors.live.accent,
+        uncheckedThumbColor = colors.neutral.accent,
+        uncheckedTrackColor = colors.border,
+        uncheckedBorderColor = colors.border,
+        disabledUncheckedThumbColor = colors.textTertiary.copy(alpha = 0.5f),
+        disabledUncheckedTrackColor = colors.surface2,
+        disabledUncheckedBorderColor = colors.surface2,
+    )
 }
 
 @Composable
@@ -355,7 +395,7 @@ private fun MeterCard(
                     AppLog.d("Device: pair with Android tapped", TAG)
                     onPair()
                 },
-                enabled = !meter.pairingInProgress,
+                enabled = !meter.pairingInProgress && meter.actionsEnabled,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
@@ -368,13 +408,14 @@ private fun MeterCard(
                     AppLog.d("Device: change meter tapped", TAG)
                     onChange()
                 },
+                enabled = meter.actionsEnabled,
                 modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                 shape = RoundedCornerShape(0.dp),
             ) {
                 Text(
                     text = if (meter.meterSaved) "Change meter" else "Choose meter",
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                    color = colors.charge.accent,
+                    color = if (meter.actionsEnabled) colors.charge.accent else colors.textTertiary,
                 )
             }
             if (meter.meterSaved) {
@@ -385,13 +426,14 @@ private fun MeterCard(
                 )
                 TextButton(
                     onClick = onForget,
+                    enabled = meter.actionsEnabled,
                     modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                     shape = RoundedCornerShape(0.dp),
                 ) {
                     Text(
                         text = "Forget meter",
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                        color = colors.error.onTint,
+                        color = if (meter.actionsEnabled) colors.error.onTint else colors.textTertiary,
                     )
                 }
             }
@@ -417,6 +459,237 @@ private fun MeterRow(label: String, value: @Composable () -> Unit) {
             modifier = Modifier.weight(1f),
         )
         value()
+    }
+}
+
+@Composable
+private fun OverlineLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall.copy(
+            fontWeight = FontWeight.Normal,
+            letterSpacing = 0.4.sp,
+        ),
+        color = KmfTheme.colors.textSecondary,
+    )
+}
+
+/**
+ * Text that always takes the width of [widest]: a shorter or longer value never moves its neighbours. Text wider
+ * than [widest] ends in an ellipsis instead of growing the slot.
+ */
+@Composable
+private fun SlotText(
+    text: String,
+    widest: String,
+    style: TextStyle,
+    modifier: Modifier = Modifier,
+    color: Color = Color.Unspecified,
+    textAlign: TextAlign = TextAlign.End,
+) {
+    Box(modifier = modifier) {
+        Text(
+            text = widest,
+            style = style,
+            color = Color.Transparent,
+            maxLines = 1,
+            modifier = Modifier.clearAndSetSemantics { },
+        )
+        Text(
+            text = text,
+            style = style,
+            color = color,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = textAlign,
+            modifier = Modifier.matchParentSize(),
+        )
+    }
+}
+
+/**
+ * Share this phone's live feed, and read another phone's feed. Every slot keeps one position and size for all
+ * values and states: two address lines, a fixed-width viewer count, one status line, always the same note.
+ */
+@Composable
+private fun NetworkCard(network: DeviceNetworkCard, callbacks: DeviceCallbacks) {
+    val colors = KmfTheme.colors
+    var addressText by rememberSaveable { mutableStateOf(network.remoteAddress) }
+    // A saved address replaces the typed text; after a disconnect the last text stays for a quick reconnect.
+    LaunchedEffect(network.remoteAddress) {
+        if (network.remoteAddress.isNotEmpty()) addressText = network.remoteAddress
+    }
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val submit = {
+        keyboard?.hide()
+        focusManager.clearFocus()
+        if (network.remoteConnected) {
+            AppLog.d("Device: disconnect from the other phone tapped", TAG)
+            callbacks.onDisconnectRemote()
+        } else {
+            AppLog.d("Device: connect through another phone tapped typedChars=${addressText.trim().length}", TAG)
+            callbacks.onConnectRemote(addressText)
+        }
+    }
+    SectionCard {
+        OverlineLabel("NETWORK")
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "Share on network",
+                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                    )
+                    Text(
+                        text = network.shareStatus,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                    )
+                }
+                Switch(
+                    checked = network.shareOn,
+                    enabled = network.shareEnabled,
+                    onCheckedChange = { checked ->
+                        AppLog.d("Device: share on network switch toggled checked=$checked (was on=${network.shareOn})", TAG)
+                        callbacks.onShareOnNetworkChange(checked)
+                    },
+                    modifier = Modifier.semantics { contentDescription = "Share on network" },
+                    colors = deviceSwitchColors(),
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(modifier = Modifier.weight(1f)) {
+                    network.shareAddresses.forEach { address ->
+                        Text(
+                            text = address,
+                            style = KmfTheme.numbers.body,
+                            color = if (network.shareOn) colors.textPrimary else colors.textTertiary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                SlotText(
+                    text = network.viewers,
+                    widest = WIDEST_VIEWERS,
+                    style = KmfTheme.numbers.body,
+                    color = colors.textSecondary,
+                )
+            }
+        }
+        HorizontalDivider(thickness = KmfDimens.Hairline, color = colors.hairline)
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "Connect through another phone",
+                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+            )
+            if (LocalDensity.current.fontScale > STACKED_FONT_SCALE) {
+                RemoteAddressField(network, addressText, { addressText = it }, submit, Modifier.fillMaxWidth())
+                RemoteActionButton(network, submit, Modifier.fillMaxWidth())
+            } else {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    RemoteAddressField(network, addressText, { addressText = it }, submit, Modifier.weight(1f))
+                    RemoteActionButton(network, submit, Modifier)
+                }
+            }
+            RemoteStatusLine(network)
+        }
+        Text(text = network.note, style = MaterialTheme.typography.bodySmall, color = colors.textTertiary)
+    }
+}
+
+@Composable
+private fun RemoteAddressField(
+    network: DeviceNetworkCard,
+    text: String,
+    onTextChange: (String) -> Unit,
+    onGo: () -> Unit,
+    modifier: Modifier,
+) {
+    val colors = KmfTheme.colors
+    OutlinedTextField(
+        value = text,
+        onValueChange = onTextChange,
+        modifier = modifier,
+        readOnly = network.remoteConnected,
+        singleLine = true,
+        isError = network.remoteError != null,
+        textStyle = KmfTheme.numbers.body,
+        label = { Text(text = "Home phone address", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        placeholder = { Text(text = "192.168.1.23", style = KmfTheme.numbers.body) },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
+        keyboardActions = KeyboardActions(onGo = { if (!network.remoteConnected) onGo() }),
+        shape = RoundedCornerShape(KmfDimens.TileRadius),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = colors.textPrimary,
+            unfocusedTextColor = colors.textPrimary,
+            errorTextColor = colors.textPrimary,
+            focusedBorderColor = colors.charge.accent,
+            unfocusedBorderColor = colors.border,
+            errorBorderColor = colors.error.accent,
+            focusedLabelColor = colors.charge.accent,
+            unfocusedLabelColor = colors.textSecondary,
+            errorLabelColor = colors.error.onTint,
+            focusedPlaceholderColor = colors.textTertiary,
+            unfocusedPlaceholderColor = colors.textTertiary,
+            cursorColor = colors.charge.accent,
+            errorCursorColor = colors.error.accent,
+        ),
+    )
+}
+
+/** One button for both states; it keeps the width of the widest label so Connect and Disconnect never differ. */
+@Composable
+private fun RemoteActionButton(network: DeviceNetworkCard, onClick: () -> Unit, modifier: Modifier) {
+    val colors = KmfTheme.colors
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier.height(OutlinedTextFieldDefaults.MinHeight),
+        shape = RoundedCornerShape(KmfDimens.TileRadius),
+        border = BorderStroke(KmfDimens.Hairline, colors.charge.accent.tint(0.5f)),
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.charge.accent),
+    ) {
+        SlotText(
+            text = if (network.remoteConnected) "Disconnect" else "Connect",
+            widest = WIDEST_REMOTE_ACTION,
+            style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp),
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+/**
+ * The refused address wins over the link status; both use the same single ellipsized line. Not a live region: the
+ * "retry in n s" countdown would be announced every second.
+ */
+@Composable
+private fun RemoteStatusLine(network: DeviceNetworkCard) {
+    val tone = if (network.remoteError != null) DeviceTone.Error else network.remoteTone
+    val color = tone.accent().accent
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        StatusDot(color = color)
+        Text(
+            text = network.remoteError ?: network.remoteStatus,
+            style = MaterialTheme.typography.bodySmall,
+            color = tone.valueColor(),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
@@ -501,14 +774,7 @@ private fun TestConnectionCard(test: DeviceTestCard, callbacks: DeviceCallbacks)
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = "DIAGNOSTICS",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontWeight = FontWeight.Normal,
-                        letterSpacing = 0.4.sp,
-                    ),
-                    color = colors.textSecondary,
-                )
+                OverlineLabel("DIAGNOSTICS")
                 Text(
                     text = "One-off test connection",
                     style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
@@ -718,14 +984,21 @@ private fun previewState(mode: DeviceMode): BleUiState {
 }
 
 @Composable
-private fun DevicePreview(mode: DeviceMode, pill: NowPill? = null) {
+private fun DevicePreview(
+    mode: DeviceMode,
+    pill: NowPill? = null,
+    state: BleUiState = previewState(mode),
+    adjust: (DeviceScreenState) -> DeviceScreenState = { it },
+) {
     KmfBleTheme {
         DeviceScreen(
-            model = DeviceScreenReducer.reduce(
-                state = previewState(mode),
-                nowMs = PREVIEW_NOW_MS,
-                sdkInt = 34,
-                zoneId = ZoneId.of("UTC"),
+            model = adjust(
+                DeviceScreenReducer.reduce(
+                    state = state,
+                    nowMs = PREVIEW_NOW_MS,
+                    sdkInt = 34,
+                    zoneId = ZoneId.of("UTC"),
+                ),
             ),
             contentPadding = PaddingValues(0.dp),
             callbacks = DeviceCallbacks(),
@@ -734,28 +1007,28 @@ private fun DevicePreview(mode: DeviceMode, pill: NowPill? = null) {
     }
 }
 
-@Preview(name = "Device - Collecting", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1180)
+@Preview(name = "Device - Collecting", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1520)
 @Composable
 private fun DeviceCollectingPreview() = DevicePreview(
     DeviceMode.Collecting,
     NowScreenReducer.pill(NowDisplayState.Charging, frameAgeMs = 2_000L),
 )
 
-@Preview(name = "Device - Collection off", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1180)
+@Preview(name = "Device - Collection off", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1520)
 @Composable
 private fun DeviceOffPreview() = DevicePreview(
     DeviceMode.CollectionOff,
     NowScreenReducer.pill(NowDisplayState.CollectionOff, frameAgeMs = null),
 )
 
-@Preview(name = "Device - Test running", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1180)
+@Preview(name = "Device - Test running", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1520)
 @Composable
 private fun DeviceTestRunningPreview() = DevicePreview(
     DeviceMode.TestRunning,
     NowScreenReducer.pill(NowDisplayState.Reconnecting, frameAgeMs = 40_000L),
 )
 
-@Preview(name = "Device - Not paired", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1180)
+@Preview(name = "Device - Not paired", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1520)
 @Composable
 private fun DeviceNotPairedPreview() = DevicePreview(DeviceMode.NotPaired)
 
@@ -764,8 +1037,59 @@ private fun DeviceNotPairedPreview() = DevicePreview(DeviceMode.NotPaired)
     backgroundColor = 0xFF0D0F12,
     showBackground = true,
     widthDp = 390,
-    heightDp = 1400,
+    heightDp = 2200,
     fontScale = 1.6f,
 )
 @Composable
 private fun DeviceLargeFontPreview() = DevicePreview(DeviceMode.Collecting)
+
+private const val PREVIEW_HOME_ADDRESS = "192.168.1.23:8765"
+private const val PREVIEW_WORST_CASE_HOST = "home-phone-with-a-very-long-name.example"
+
+private fun remotePreviewState(link: CollectionState): BleUiState = previewState(DeviceMode.CollectionOff).copy(
+    remoteAddress = PREVIEW_HOME_ADDRESS,
+    selectedDevice = ScannedDevice("KMF-BT-5A3C", "remote:$PREVIEW_HOME_ADDRESS", 0, emptyList()),
+    collectionState = link,
+)
+
+private fun remoteLink(phase: CollectionPhase, offline: Boolean = false) = CollectionState(
+    phase = phase,
+    visibility = CollectionVisibility.FOREGROUND,
+    deviceAddress = "remote:$PREVIEW_HOME_ADDRESS",
+    error = if (offline) "Connection refused" else null,
+    nextReconnectAtMs = if (offline) PREVIEW_NOW_MS + 5_000L else null,
+    remoteUnreachable = offline,
+)
+
+@Preview(name = "Device - Remote connected", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1520)
+@Composable
+private fun DeviceRemoteConnectedPreview() = DevicePreview(
+    DeviceMode.CollectionOff,
+    NowScreenReducer.pill(NowDisplayState.Charging, frameAgeMs = 2_000L),
+    state = remotePreviewState(remoteLink(CollectionPhase.COLLECTING)),
+)
+
+@Preview(name = "Device - Remote, phone offline", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1520)
+@Composable
+private fun DeviceRemotePhoneOfflinePreview() = DevicePreview(
+    DeviceMode.CollectionOff,
+    NowScreenReducer.pill(NowDisplayState.Stale, frameAgeMs = 40_000L),
+    state = remotePreviewState(remoteLink(CollectionPhase.ERROR, offline = true)),
+)
+
+/** Two `100.100.100.100` addresses, `12 viewers` and a 40 character host typed into the field. */
+@Preview(name = "Device - Sharing, worst case", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1520)
+@Composable
+private fun DeviceSharingWorstCasePreview() = DevicePreview(
+    DeviceMode.Collecting,
+    state = previewState(DeviceMode.Collecting).copy(
+        shareOnNetwork = true,
+        sharingStatus = SharingStatus(
+            running = true,
+            port = 8765,
+            addresses = listOf("100.100.100.100", "100.100.100.100"),
+            viewers = 12,
+        ),
+    ),
+    adjust = { it.copy(network = it.network.copy(remoteAddress = PREVIEW_WORST_CASE_HOST)) },
+)

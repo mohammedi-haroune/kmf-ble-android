@@ -1471,6 +1471,48 @@ class BleViewModelTest {
     }
 
     @Test
+    fun meterActionsAreIgnoredInRemoteMode() = runTest {
+        val snapshot = configuredSnapshot()
+        val store = FakeDeviceStore(initial = snapshot, initialRemoteAddress = "h:8765").apply {
+            setFirstRunCompleted(true)
+        }
+        val gateway = FakeCompanionAssociationGateway().apply { associatedAddresses += snapshot.address }
+        val commander = FakeCollectionServiceCommander(store.operationLog)
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = BleViewModel(
+            repository = FakeBleRepository(),
+            deviceStore = store,
+            historyStore = FakeHistoryStore(),
+            companionAssociationGateway = gateway,
+            collectionServiceCommander = commander,
+            scope = viewModelScope,
+            remoteLink = FakeRemoteMeterLink(),
+        )
+
+        try {
+            advanceUntilIdle()
+            assertTrue(viewModel.uiState.value.remoteMode)
+            val before = viewModel.uiState.value
+
+            viewModel.forgetMeter()
+            viewModel.changeMeter()
+            viewModel.pairWithAndroid()
+            viewModel.requestAutonomousCollection()
+            advanceUntilIdle()
+
+            assertEquals(snapshot, store.snapshot.first())
+            assertEquals(emptyList<String>(), store.operationLog)
+            assertEquals(emptyList<String>(), commander.commands)
+            assertEquals(emptyList<String>(), gateway.disassociatedAddresses)
+            assertEquals(emptyList<String>(), gateway.associationRequests)
+            assertEquals("h:8765", store.remoteAddressState.value)
+            assertEquals(before, viewModel.uiState.value)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
     fun retryInRemoteModeReconnectsLink() = runTest {
         val commander = FakeCollectionServiceCommander()
         val link = FakeRemoteMeterLink()

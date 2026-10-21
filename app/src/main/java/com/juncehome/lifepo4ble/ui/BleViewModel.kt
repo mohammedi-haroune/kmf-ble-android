@@ -343,6 +343,10 @@ class BleViewModel(
     }
 
     fun requestAutonomousCollection() {
+        if (remoteAddress != null) {
+            AppLog.w("Companion setup ignored in remote mode; this phone does not use the meter over Bluetooth", TAG)
+            return
+        }
         // Notifications are requested separately (first-run step 4); companion setup only needs
         // the Bluetooth permissions.
         if (!mutableUiState.value.bluetoothPermissionsGranted) {
@@ -643,6 +647,10 @@ class BleViewModel(
 
     /** Device tab "Pair with Android": runs the companion association for the saved meter. */
     fun pairWithAndroid() {
+        if (remoteAddress != null) {
+            AppLog.w("Device: pair with Android ignored in remote mode", TAG)
+            return
+        }
         AppLog.d("Device: pair with Android requested meterSaved=${mutableUiState.value.savedMeterAddress != null}", TAG)
         requestAutonomousCollection()
     }
@@ -773,6 +781,10 @@ class BleViewModel(
      * meter (which also clears the first-run completion flag). Saved battery history is kept.
      */
     private fun resetSavedMeter(reason: String) {
+        if (remoteAddress != null) {
+            AppLog.w("Device: $reason meter ignored in remote mode; the saved meter is not in use", TAG)
+            return
+        }
         val state = mutableUiState.value
         AppLog.d(
             "Device: $reason meter requested configured=$autonomousCollectionConfigured " +
