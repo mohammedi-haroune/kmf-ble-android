@@ -141,6 +141,8 @@ class AppGraph(
                     collectionServiceCommander = AndroidCollectionServiceCommander(application),
                     autonomousCollectionDisabler = autonomousCollectionDisabler,
                     collectionStatus = collectionStatusRelay.state,
+                    remoteLink = remoteMeterLink,
+                    sharingStatus = sharingStatusRelay.state,
                 ) as T
             }
             error("Unknown ViewModel class ${modelClass.name}")

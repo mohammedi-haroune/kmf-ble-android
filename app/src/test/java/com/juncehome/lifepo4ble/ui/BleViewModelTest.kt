@@ -5,7 +5,10 @@ import com.juncehome.lifepo4ble.ble.BleRepositoryContract
 import com.juncehome.lifepo4ble.ble.GattProfile
 import com.juncehome.lifepo4ble.ble.ScannedDevice
 import com.juncehome.lifepo4ble.collection.CollectionConfiguration
+import com.juncehome.lifepo4ble.collection.CollectionPhase
 import com.juncehome.lifepo4ble.collection.CollectionServiceCommander
+import com.juncehome.lifepo4ble.collection.CollectionState
+import com.juncehome.lifepo4ble.collection.CollectionVisibility
 import com.juncehome.lifepo4ble.collection.CompanionAssociationGateway
 import com.juncehome.lifepo4ble.data.DeviceSnapshot
 import com.juncehome.lifepo4ble.data.DeviceSnapshotStore
@@ -14,6 +17,11 @@ import com.juncehome.lifepo4ble.data.KmfFrameEventEntity
 import com.juncehome.lifepo4ble.data.KmfHistoryStore
 import com.juncehome.lifepo4ble.data.KmfNotificationObservation
 import com.juncehome.lifepo4ble.data.KmfWriteObservation
+import com.juncehome.lifepo4ble.remote.RemoteAddress
+import com.juncehome.lifepo4ble.remote.RemoteMeterLinkContract
+import com.juncehome.lifepo4ble.remote.SharingStatus
+import com.juncehome.lifepo4ble.remote.TimedBleEvent
+import com.juncehome.lifepo4ble.ui.now.NowScreenReducer
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -24,7 +32,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -32,9 +42,18 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+
+// Capacity 180 Ah, remaining 152.34 Ah: 84.63 %.
+private const val FULL_A = ":A=1331,5200,1,2380,152340,1800,\r\n"
+private const val SECOND_A = ":A=1332,5300,1,2370,152200,1800,\r\n"
+// No capacity field: 5.2 A for 1760 min is 152.53 Ah left to empty.
+private const val SHORT_A = ":A=1329,5200,0,1760,\r\n"
+private const val B_LINE = ":B=1226110,0,271158,\r\n"
+private const val C_LINE = ":C=1820,486\r\n"
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class BleViewModelTest {
@@ -1144,9 +1163,681 @@ class BleViewModelTest {
         }
     }
 
+    // ---- Remote mode: the Now tab reads the meter through another phone ----
+
+    @Test
+    fun remoteFramesUseSameReducerAndHomeTime() = runTest {
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, FakeDeviceStore(initialRemoteAddress = "h:8765"), link)
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            advanceUntilIdle()
+            assertEquals(listOf("start h:8765"), link.calls)
+
+            link.events.emit(TimedBleEvent(BleEvent.Connecting(remoteMeter()), 500L))
+            link.events.emit(TimedBleEvent(BleEvent.Connected(remoteMeter()), 600L))
+            link.events.emit(remoteLine(FULL_A, atMs = 1_000L))
+            advanceUntilIdle()
+
+            val state = viewModel.uiState.value
+            assertTrue(state.remoteMode)
+            assertEquals("h:8765", state.remoteAddress)
+            assertEquals("remote:h:8765", state.selectedDevice?.address)
+            assertEquals(180.0, state.latestReading.capacityAh, 0.001)
+            assertEquals(84.63, state.latestReading.socPercent, 0.01)
+            assertEquals(1_000L, state.lastReadingTimestampMs)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun remoteModeIgnoresLocalSavedSamples() = runTest {
+        val snapshot = configuredSnapshot()
+        val historyStore = FakeHistoryStore().apply {
+            emitRecentBatterySamples(snapshot.address, listOf(batterySample(id = 1, timestampMs = 99L, socPercent = 12.0)))
+        }
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(
+            viewModelScope,
+            FakeDeviceStore(initial = snapshot, initialRemoteAddress = "h:8765"),
+            link,
+            historyStore = historyStore,
+        )
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            advanceUntilIdle()
+
+            assertNotEquals(12.0, viewModel.uiState.value.latestReading.socPercent, 0.001)
+            assertNull(viewModel.uiState.value.lastReadingTimestampMs)
+            assertEquals(emptyList<String>(), historyStore.recentObservations)
+            assertEquals(emptyList<KmfBatterySampleEntity>(), viewModel.recentBatterySamples.value)
+            // The saved meter stays known (Device tab) but is not the displayed meter.
+            assertEquals(snapshot.address, viewModel.uiState.value.savedMeterAddress)
+            assertNull(viewModel.uiState.value.selectedDevice)
+
+            link.events.emit(TimedBleEvent(BleEvent.Connecting(remoteMeter()), 500L))
+            link.events.emit(remoteLine(FULL_A, atMs = 1_000L))
+            advanceUntilIdle()
+
+            assertEquals(listOf("remote:h:8765"), viewModel.recentBatterySamples.value.map { it.deviceAddress })
+            assertEquals(emptyList<String>(), historyStore.recentObservations)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun enteringRemoteModeDropsAlreadyShownBluetoothSamples() = runTest {
+        val snapshot = configuredSnapshot()
+        val historyStore = FakeHistoryStore().apply {
+            emitRecentBatterySamples(snapshot.address, listOf(batterySample(id = 1, timestampMs = 99L, socPercent = 12.0)))
+        }
+        val store = FakeDeviceStore(initial = snapshot)
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, store, FakeRemoteMeterLink(), historyStore = historyStore)
+
+        try {
+            advanceUntilIdle()
+            assertEquals(12.0, viewModel.uiState.value.latestReading.socPercent, 0.001)
+            assertEquals(1, viewModel.recentBatterySamples.value.size)
+
+            store.setRemoteAddress("h:8765")
+            advanceUntilIdle()
+
+            assertEquals(0.0, viewModel.uiState.value.latestReading.socPercent, 0.001)
+            assertNull(viewModel.uiState.value.lastReadingTimestampMs)
+            assertEquals(emptyList<KmfBatterySampleEntity>(), viewModel.recentBatterySamples.value)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun remoteChartPointsComeFromLiveAFrames() = runTest {
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, FakeDeviceStore(initialRemoteAddress = "h:8765"), link)
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            link.events.emit(TimedBleEvent(BleEvent.Connecting(remoteMeter()), 500L))
+            link.events.emit(remoteLine(FULL_A, atMs = 1_000L))
+            link.events.emit(remoteLine(B_LINE, atMs = 1_100L))
+            link.events.emit(remoteLine(C_LINE, atMs = 1_200L))
+            assertEquals(listOf(1_000L), viewModel.recentBatterySamples.value.map { it.timestampMs })
+
+            link.events.emit(remoteLine(SECOND_A, atMs = 2_000L))
+            advanceUntilIdle()
+
+            val points = viewModel.recentBatterySamples.value
+            assertEquals(listOf(2_000L, 1_000L), points.map { it.timestampMs })
+            val newest = points.first()
+            assertEquals("remote:h:8765", newest.deviceAddress)
+            assertEquals(0L, newest.id)
+            assertEquals(13.32, newest.voltageV, 0.001)
+            assertEquals(5.3, newest.currentA, 0.001)
+            assertEquals(70.596, newest.powerW, 0.001)
+            assertEquals(viewModel.uiState.value.latestReading.powerW, newest.powerW, 0.001)
+            assertEquals(viewModel.uiState.value.latestReading.socPercent, newest.socPercent, 0.001)
+            assertTrue(newest.hasAFrame)
+            assertTrue(newest.hasBFrame)
+            assertTrue(newest.hasCFrame)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun remoteChartKeepsOnlyTheChartWindowAndTheSampleLimit() = runTest {
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, FakeDeviceStore(initialRemoteAddress = "h:8765"), link)
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            link.events.emit(TimedBleEvent(BleEvent.Connecting(remoteMeter()), 0L))
+            link.events.emit(remoteLine(FULL_A, atMs = 1_000L))
+            link.events.emit(remoteLine(FULL_A, atMs = 2_000L))
+            assertEquals(2, viewModel.recentBatterySamples.value.size)
+
+            // Exactly one window later the first point is the oldest one still inside it.
+            link.events.emit(remoteLine(FULL_A, atMs = 1_000L + NowScreenReducer.CHART_WINDOW_MS))
+            assertEquals(
+                listOf(1_000L + NowScreenReducer.CHART_WINDOW_MS, 2_000L, 1_000L),
+                viewModel.recentBatterySamples.value.map { it.timestampMs },
+            )
+            link.events.emit(remoteLine(FULL_A, atMs = 1_001L + NowScreenReducer.CHART_WINDOW_MS))
+            assertEquals(
+                listOf(1_001L + NowScreenReducer.CHART_WINDOW_MS, 1_000L + NowScreenReducer.CHART_WINDOW_MS, 2_000L),
+                viewModel.recentBatterySamples.value.map { it.timestampMs },
+            )
+
+            // A burst of frames inside one window never grows past the live sample limit.
+            val burstStartMs = 10_000_000L
+            repeat(2_100) { index -> link.events.emit(remoteLine(FULL_A, atMs = burstStartMs + index)) }
+            val samples = viewModel.recentBatterySamples.value
+            assertEquals(2_048, samples.size)
+            assertEquals(burstStartMs + 2_099, samples.first().timestampMs)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun connectRemoteStopsBluetoothCollectionAndSavesAddress() = runTest {
+        val snapshot = configuredSnapshot()
+        val store = FakeDeviceStore(initial = snapshot)
+        store.enableAutonomousCollection(snapshot, associationId = 7)
+        val commander = FakeCollectionServiceCommander()
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, store, link, commander = commander)
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            advanceUntilIdle()
+            assertTrue(viewModel.uiState.value.autonomousCollectionConfigured)
+
+            viewModel.connectRemote(" H:8765 ")
+            advanceUntilIdle()
+
+            assertTrue("stop" in commander.commands)
+            assertEquals("h:8765", store.remoteAddressState.value)
+            assertEquals(listOf("disable"), store.operationLog)
+            val state = viewModel.uiState.value
+            assertFalse(state.autonomousCollectionConfigured)
+            assertTrue(state.remoteMode)
+            assertEquals("h:8765", state.remoteAddress)
+            assertNull(state.remoteAddressError)
+            assertEquals(listOf("start h:8765"), link.calls)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun connectRemoteEndsAnActiveTestConnection() = runTest {
+        val snapshot = configuredSnapshot()
+        val store = FakeDeviceStore(initial = snapshot)
+        val repository = FakeBleRepository()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, store, FakeRemoteMeterLink(), repository = repository)
+
+        try {
+            advanceUntilIdle()
+            viewModel.startTestConnection()
+            advanceUntilIdle()
+            assertTrue(viewModel.uiState.value.testConnectionActive)
+
+            viewModel.connectRemote("h")
+            advanceUntilIdle()
+
+            assertFalse(viewModel.uiState.value.testConnectionActive)
+            assertEquals(1, repository.disconnectCalls)
+            assertEquals("h:8765", store.remoteAddressState.value)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun connectRemoteRejectsInvalidAddress() = runTest {
+        val snapshot = configuredSnapshot()
+        val store = FakeDeviceStore(initial = snapshot)
+        store.enableAutonomousCollection(snapshot, associationId = 7)
+        val commander = FakeCollectionServiceCommander()
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, store, link, commander = commander)
+
+        try {
+            advanceUntilIdle()
+            val before = viewModel.uiState.value
+
+            viewModel.connectRemote("fe80::1")
+            advanceUntilIdle()
+
+            assertEquals(
+                before.copy(remoteAddressError = "Enter a host name or IP, optionally with :port"),
+                viewModel.uiState.value,
+            )
+            assertNull(store.remoteAddressState.value)
+            assertEquals(emptyList<String>(), commander.commands)
+            assertEquals(emptyList<String>(), store.operationLog)
+            assertEquals(emptyList<String>(), link.calls)
+
+            viewModel.connectRemote("home-phone")
+            advanceUntilIdle()
+
+            assertNull(viewModel.uiState.value.remoteAddressError)
+            assertEquals("home-phone:8765", store.remoteAddressState.value)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun disconnectRemoteReturnsToBluetoothWithCollectionOff() = runTest {
+        val snapshot = configuredSnapshot()
+        val historyStore = FakeHistoryStore().apply {
+            emitRecentBatterySamples(snapshot.address, listOf(batterySample(id = 1, timestampMs = 99L)))
+        }
+        val store = FakeDeviceStore(initial = snapshot, initialRemoteAddress = "h:8765")
+        val commander = FakeCollectionServiceCommander()
+        val link = FakeRemoteMeterLink()
+        val relay = MutableStateFlow<CollectionState?>(stoppedState())
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(
+            viewModelScope, store, link, historyStore = historyStore, commander = commander, relay = relay,
+        )
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            link.state.value = collectionState(CollectionPhase.COLLECTING)
+            link.events.emit(TimedBleEvent(BleEvent.Connecting(remoteMeter()), 500L))
+            link.events.emit(remoteLine(FULL_A, atMs = 1_000L))
+            advanceUntilIdle()
+            assertEquals(CollectionPhase.COLLECTING, viewModel.uiState.value.collectionState?.phase)
+            assertEquals(1, viewModel.recentBatterySamples.value.size)
+            assertEquals(emptyList<String>(), historyStore.recentObservations)
+
+            viewModel.disconnectRemote()
+            advanceUntilIdle()
+
+            assertEquals("stop", link.calls.last())
+            assertNull(store.remoteAddressState.value)
+            val state = viewModel.uiState.value
+            assertFalse(state.remoteMode)
+            assertNull(state.remoteAddress)
+            assertEquals(snapshot.address, state.selectedDevice?.address)
+            assertEquals(CollectionPhase.STOPPED, state.collectionState?.phase)
+            assertFalse(state.autonomousCollectionConfigured)
+            // Back on the saved meter's history, as after a normal launch with collection off.
+            assertEquals(listOf(snapshot.address), historyStore.recentObservations)
+            assertEquals(listOf(99L), viewModel.recentBatterySamples.value.map { it.timestampMs })
+            assertEquals(99L, state.lastReadingTimestampMs)
+            assertEquals(57.9, state.latestReading.socPercent, 0.001)
+            // Collection stays off: nothing starts the service or the Bluetooth link.
+            assertEquals(emptyList<String>(), commander.commands)
+            assertEquals(emptyList<String>(), store.operationLog)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun retryInRemoteModeReconnectsLink() = runTest {
+        val commander = FakeCollectionServiceCommander()
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(
+            viewModelScope, FakeDeviceStore(initialRemoteAddress = "h:8765"), link, commander = commander,
+        )
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            advanceUntilIdle()
+
+            viewModel.retryCollectionNow()
+
+            assertEquals(listOf("start h:8765", "reconnectNow"), link.calls)
+            assertEquals(emptyList<String>(), commander.commands)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun remoteLinkFollowsAppVisibility() = runTest {
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, FakeDeviceStore(initialRemoteAddress = "h:8765"), link)
+
+        try {
+            advanceUntilIdle()
+            // The address is known but the app is not visible yet: no link.
+            assertEquals(emptyList<String>(), link.calls)
+
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            assertEquals(listOf("start h:8765"), link.calls)
+
+            link.events.emit(TimedBleEvent(BleEvent.Connecting(remoteMeter()), 500L))
+            link.events.emit(remoteLine(FULL_A, atMs = 1_000L))
+            viewModel.onAppVisibilityChanged(CollectionVisibility.BACKGROUND)
+            assertEquals(listOf("start h:8765", "stop"), link.calls)
+            // The last values stay on screen while the app is in the background.
+            assertEquals(180.0, viewModel.uiState.value.latestReading.capacityAh, 0.001)
+            assertEquals(1_000L, viewModel.uiState.value.lastReadingTimestampMs)
+
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            assertEquals(listOf("start h:8765", "stop", "start h:8765"), link.calls)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun bluetoothModeNeverTouchesTheRemoteLink() = runTest {
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, FakeDeviceStore(initial = configuredSnapshot()), link)
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            advanceUntilIdle()
+            viewModel.onAppVisibilityChanged(CollectionVisibility.BACKGROUND)
+            viewModel.retryCollectionNow()
+            advanceUntilIdle()
+
+            assertFalse(viewModel.uiState.value.remoteMode)
+            assertEquals(emptyList<String>(), link.calls)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun changingTheRemoteAddressRestartsTheLinkAndDropsTheOldMeterValues() = runTest {
+        val store = FakeDeviceStore(initialRemoteAddress = "h:8765")
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, store, link)
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            link.events.emit(TimedBleEvent(BleEvent.Connecting(remoteMeter()), 500L))
+            link.events.emit(remoteLine(FULL_A, atMs = 1_000L))
+            advanceUntilIdle()
+            assertEquals(1, viewModel.recentBatterySamples.value.size)
+
+            viewModel.connectRemote("other:9000")
+            advanceUntilIdle()
+
+            assertEquals(listOf("start h:8765", "start other:9000"), link.calls)
+            assertEquals("other:9000", viewModel.uiState.value.remoteAddress)
+            assertEquals(0.0, viewModel.uiState.value.latestReading.socPercent, 0.001)
+            assertNull(viewModel.uiState.value.lastReadingTimestampMs)
+            assertEquals(emptyList<KmfBatterySampleEntity>(), viewModel.recentBatterySamples.value)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun storedRemoteAddressThatDoesNotParseMeansBluetoothMode() = runTest {
+        val snapshot = configuredSnapshot()
+        val historyStore = FakeHistoryStore().apply {
+            emitRecentBatterySamples(snapshot.address, listOf(batterySample(id = 1, timestampMs = 99L)))
+        }
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(
+            viewModelScope,
+            FakeDeviceStore(initial = snapshot, initialRemoteAddress = "fe80::1"),
+            link,
+            historyStore = historyStore,
+        )
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            advanceUntilIdle()
+
+            val state = viewModel.uiState.value
+            assertFalse(state.remoteMode)
+            assertNull(state.remoteAddress)
+            assertEquals(emptyList<String>(), link.calls)
+            assertEquals(snapshot.address, state.selectedDevice?.address)
+            assertEquals(1, viewModel.recentBatterySamples.value.size)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun launchReportsConfigurationLoadedOnlyTogetherWithTheRemoteAddress() = runTest {
+        val remoteAddresses = MutableSharedFlow<String?>(extraBufferCapacity = 1)
+        val store = FakeDeviceStore(remoteAddressFlow = remoteAddresses)
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, store, FakeRemoteMeterLink())
+        val seen = mutableListOf<BleUiState>()
+        val collector = viewModelScope.launch { viewModel.uiState.collect { seen += it } }
+
+        try {
+            runCurrent()
+            // The configuration is known but the mode is not yet: the Now tab must not decide anything.
+            assertFalse(viewModel.uiState.value.collectionConfigurationLoaded)
+
+            remoteAddresses.emit("h:8765")
+            advanceUntilIdle()
+
+            val loaded = seen.filter { it.collectionConfigurationLoaded }
+            assertTrue(loaded.isNotEmpty())
+            assertTrue("configuration loaded without the remote address: $loaded", loaded.all { it.remoteMode })
+        } finally {
+            collector.cancel()
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun collectionStateComesFromRemoteLinkInRemoteMode() = runTest {
+        val link = FakeRemoteMeterLink()
+        val relay = MutableStateFlow<CollectionState?>(stoppedState())
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(
+            viewModelScope, FakeDeviceStore(initialRemoteAddress = "h:8765"), link, relay = relay,
+        )
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            advanceUntilIdle()
+            assertNull(viewModel.uiState.value.collectionState)
+
+            link.state.value = collectionState(CollectionPhase.COLLECTING)
+            advanceUntilIdle()
+            assertEquals(CollectionPhase.COLLECTING, viewModel.uiState.value.collectionState?.phase)
+
+            // A Bluetooth service state change must not leak into the remote phase.
+            relay.value = collectionState(CollectionPhase.WAITING_FOR_DEVICE)
+            advanceUntilIdle()
+            assertEquals(CollectionPhase.COLLECTING, viewModel.uiState.value.collectionState?.phase)
+
+            // A stopped link (app in the background) keeps the last remote state on screen.
+            link.state.value = null
+            advanceUntilIdle()
+            assertEquals(CollectionPhase.COLLECTING, viewModel.uiState.value.collectionState?.phase)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun bluetoothEventsIgnoredInRemoteMode() = runTest {
+        val repository = FakeBleRepository()
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(
+            viewModelScope, FakeDeviceStore(initialRemoteAddress = "h:8765"), link, repository = repository,
+        )
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            link.events.emit(TimedBleEvent(BleEvent.Connecting(remoteMeter()), 500L))
+            link.events.emit(remoteLine(FULL_A, atMs = 1_000L))
+            advanceUntilIdle()
+            val before = viewModel.uiState.value
+
+            val device = ScannedDevice("KMF", "AA:BB:CC:DD:EE:FF", -55, emptyList())
+            repository.events.emit(BleEvent.Connecting(device))
+            repository.events.emit(
+                BleEvent.NotificationReceived(UUID.randomUUID(), ":A=1200,100,0,60,5000,10000,\n".encodeToByteArray()),
+            )
+            repository.events.emit(BleEvent.Disconnected("closing"))
+            advanceUntilIdle()
+
+            assertEquals(before, viewModel.uiState.value)
+            assertEquals(180.0, viewModel.uiState.value.latestReading.capacityAh, 0.001)
+            assertEquals("remote:h:8765", viewModel.uiState.value.selectedDevice?.address)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun remoteResumeKeepsLastReadingUntilReplay() = runTest {
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, FakeDeviceStore(initialRemoteAddress = "h:8765"), link)
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            link.events.emit(TimedBleEvent(BleEvent.Connecting(remoteMeter()), 500L))
+            link.events.emit(TimedBleEvent(BleEvent.Connected(remoteMeter()), 600L))
+            link.events.emit(remoteLine(FULL_A, atMs = 1_000L))
+            link.events.emit(remoteLine(B_LINE, atMs = 1_100L))
+            link.events.emit(remoteLine(C_LINE, atMs = 1_200L))
+            advanceUntilIdle()
+            val shown = viewModel.uiState.value.latestReading
+            assertEquals(180.0, shown.capacityAh, 0.001)
+
+            viewModel.onAppVisibilityChanged(CollectionVisibility.BACKGROUND)
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            link.events.emit(TimedBleEvent(BleEvent.Connecting(remoteMeter()), 9_000L))
+            advanceUntilIdle()
+
+            val resyncing = viewModel.uiState.value
+            assertEquals(shown, resyncing.latestReading)
+            assertEquals(1_200L, resyncing.lastReadingTimestampMs)
+            assertFalse(resyncing.hasAFrame)
+            assertFalse(resyncing.hasBFrame)
+
+            // A short A frame on the resumed stream merges onto the kept capacity, never onto zeros.
+            link.events.emit(remoteLine(SHORT_A, atMs = 9_500L))
+            advanceUntilIdle()
+            assertEquals(180.0, viewModel.uiState.value.latestReading.capacityAh, 0.001)
+            assertEquals(13.29, viewModel.uiState.value.latestReading.voltageV, 0.001)
+            assertEquals(84.74, viewModel.uiState.value.latestReading.socPercent, 0.01)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun bluetoothActionsAreIgnoredInRemoteMode() = runTest {
+        val snapshot = configuredSnapshot()
+        val commander = FakeCollectionServiceCommander()
+        val repository = FakeBleRepository()
+        val gateway = FakeCompanionAssociationGateway().apply { associatedAddresses += snapshot.address }
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = BleViewModel(
+            repository = repository,
+            deviceStore = FakeDeviceStore(initial = snapshot, initialRemoteAddress = "h:8765"),
+            historyStore = FakeHistoryStore(),
+            companionAssociationGateway = gateway,
+            collectionServiceCommander = commander,
+            scope = viewModelScope,
+            remoteLink = FakeRemoteMeterLink(),
+        )
+
+        try {
+            advanceUntilIdle()
+
+            viewModel.startCollectionFromNow()
+            viewModel.enableBackgroundCollection()
+            viewModel.startTestConnection()
+            viewModel.startScan()
+            viewModel.connect(ScannedDevice("KMF", snapshot.address, -55, emptyList()))
+            advanceUntilIdle()
+
+            assertEquals(emptyList<String>(), commander.commands)
+            assertEquals(emptyList<String>(), gateway.observedAddresses)
+            assertEquals(emptyList<String>(), gateway.associationRequests)
+            assertEquals(emptyList<Pair<ScannedDevice, DeviceSnapshot?>>(), repository.connectCalls)
+            assertEquals(0, repository.startScanCalls)
+            assertFalse(viewModel.uiState.value.testConnectionActive)
+            assertEquals(AutonomousCollectionStatus.NOT_CONFIGURED, viewModel.uiState.value.autonomousCollectionStatus)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun shareOnNetworkAndSharingStatusReachUiState() = runTest {
+        val store = FakeDeviceStore()
+        val sharing = MutableStateFlow<SharingStatus?>(null)
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, store, FakeRemoteMeterLink(), sharing = sharing)
+
+        try {
+            advanceUntilIdle()
+            assertFalse(viewModel.uiState.value.shareOnNetwork)
+            assertNull(viewModel.uiState.value.sharingStatus)
+
+            viewModel.setShareOnNetwork(true)
+            advanceUntilIdle()
+            assertTrue(store.shareOnNetworkState.value)
+            assertTrue(viewModel.uiState.value.shareOnNetwork)
+
+            val running = SharingStatus(running = true, port = 8765, addresses = listOf("192.168.1.20"), viewers = 2)
+            sharing.value = running
+            advanceUntilIdle()
+            assertEquals(running, viewModel.uiState.value.sharingStatus)
+
+            viewModel.setShareOnNetwork(false)
+            advanceUntilIdle()
+            assertFalse(store.shareOnNetworkState.value)
+            assertFalse(viewModel.uiState.value.shareOnNetwork)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    private fun remoteViewModel(
+        scope: CoroutineScope,
+        store: FakeDeviceStore,
+        link: FakeRemoteMeterLink,
+        repository: FakeBleRepository = FakeBleRepository(),
+        historyStore: FakeHistoryStore = FakeHistoryStore(),
+        commander: FakeCollectionServiceCommander? = null,
+        relay: StateFlow<CollectionState?>? = null,
+        sharing: StateFlow<SharingStatus?>? = null,
+    ): BleViewModel = BleViewModel(
+        repository = repository,
+        deviceStore = store,
+        historyStore = historyStore,
+        collectionServiceCommander = commander,
+        scope = scope,
+        collectionStatus = relay,
+        remoteLink = link,
+        sharingStatus = sharing,
+    )
+
+    private fun remoteMeter(): ScannedDevice = ScannedDevice(
+        name = "Home meter",
+        address = checkNotNull(RemoteAddress.parse("h:8765")).id,
+        rssi = 0,
+        serviceUuids = emptyList(),
+    )
+
+    private fun remoteLine(line: String, atMs: Long): TimedBleEvent =
+        TimedBleEvent(BleEvent.NotificationReceived(UUID(0L, 0L), line.encodeToByteArray()), atMs)
+
+    private fun collectionState(phase: CollectionPhase): CollectionState = CollectionState(
+        phase = phase,
+        visibility = CollectionVisibility.FOREGROUND,
+    )
+
+    private fun stoppedState(): CollectionState = collectionState(CollectionPhase.STOPPED)
+
     private fun batterySample(
         id: Long,
         timestampMs: Long,
+        socPercent: Double = 57.9,
     ): KmfBatterySampleEntity =
         KmfBatterySampleEntity(
             id = id,
@@ -1160,7 +1851,7 @@ class BleViewModelTest {
             minutesRemaining = 95,
             remainingAh = 57.93,
             capacityAh = 100.0,
-            socPercent = 57.9,
+            socPercent = socPercent,
             chargeKwh = 12.34,
             dischargeKwh = 7.89,
             hasAFrame = true,
@@ -1216,6 +1907,8 @@ class BleViewModelTest {
     private class FakeDeviceStore(
         initial: DeviceSnapshot? = null,
         configurationFlow: Flow<CollectionConfiguration?>? = null,
+        initialRemoteAddress: String? = null,
+        remoteAddressFlow: Flow<String?>? = null,
     ) : DeviceSnapshotStore {
         private val snapshots = MutableStateFlow(initial)
         private val configurations = MutableStateFlow<CollectionConfiguration?>(null)
@@ -1266,6 +1959,20 @@ class BleViewModelTest {
 
         override suspend fun setFirstRunCompleted(completed: Boolean) {
             firstRunCompletedState.value = completed
+        }
+
+        val shareOnNetworkState = MutableStateFlow(false)
+        override val shareOnNetwork: Flow<Boolean> = shareOnNetworkState
+
+        override suspend fun setShareOnNetwork(enabled: Boolean) {
+            shareOnNetworkState.value = enabled
+        }
+
+        val remoteAddressState = MutableStateFlow(initialRemoteAddress)
+        override val remoteAddress: Flow<String?> = remoteAddressFlow ?: remoteAddressState
+
+        override suspend fun setRemoteAddress(address: String?) {
+            remoteAddressState.value = address
         }
     }
 
@@ -1334,6 +2041,26 @@ class BleViewModelTest {
         }
     }
 
+    private class FakeRemoteMeterLink : RemoteMeterLinkContract {
+        override val events = MutableSharedFlow<TimedBleEvent>(extraBufferCapacity = 64)
+        override val state = MutableStateFlow<CollectionState?>(null)
+
+        /** "start host:port", "stop" and "reconnectNow" in call order. */
+        val calls = mutableListOf<String>()
+
+        override fun start(address: RemoteAddress) {
+            calls += "start ${address.display}"
+        }
+
+        override fun stop() {
+            calls += "stop"
+        }
+
+        override fun reconnectNow() {
+            calls += "reconnectNow"
+        }
+    }
+
     private fun configuredSnapshot(): DeviceSnapshot = DeviceSnapshot(
         address = "AA:BB:CC:DD:EE:FF",
         name = "KMF",
@@ -1348,6 +2075,9 @@ class BleViewModelTest {
         val writes = mutableListOf<KmfWriteObservation>()
         private val recentBatterySamplesByDevice =
             mutableMapOf<String, MutableStateFlow<List<KmfBatterySampleEntity>>>()
+
+        /** Every address the view model asked recent samples for, in order. */
+        val recentObservations = mutableListOf<String>()
 
         override suspend fun resetSession(deviceAddress: String) {
             resetSessions += deviceAddress
@@ -1367,8 +2097,10 @@ class BleViewModelTest {
         override fun observeRecentBatterySamples(
             deviceAddress: String,
             limit: Int,
-        ): Flow<List<KmfBatterySampleEntity>> =
-            recentBatterySamplesByDevice.getOrPut(deviceAddress) { MutableStateFlow(emptyList()) }
+        ): Flow<List<KmfBatterySampleEntity>> {
+            recentObservations += deviceAddress
+            return recentBatterySamplesByDevice.getOrPut(deviceAddress) { MutableStateFlow(emptyList()) }
+        }
 
         override fun observeRecentFrameEvents(
             deviceAddress: String,
