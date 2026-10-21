@@ -9,6 +9,8 @@ import com.juncehome.lifepo4ble.collection.CollectionVisibility
 import com.juncehome.lifepo4ble.protocol.KmfLineParser
 import com.juncehome.lifepo4ble.protocol.KmfReading
 import com.juncehome.lifepo4ble.protocol.KmfReadingMerger
+import java.io.ByteArrayOutputStream
+import java.io.PrintStream
 import java.util.UUID
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -249,6 +251,29 @@ class LiveFeedHubTest {
             drain(subscription),
         )
         assertEquals(CollectionPhase.ERROR, hub.now().phase)
+    }
+
+    @Test
+    fun longErrorTextIsTruncatedInTheLogButSentWhole() {
+        val subscription = hub.subscribe()
+        drain(subscription)
+        val error = "e".repeat(5_000)
+        val captured = ByteArrayOutputStream()
+        val original = System.out
+        System.setOut(PrintStream(captured, true, "UTF-8"))
+        try {
+            hub.onCollectionState(state(CollectionPhase.ERROR, error = error))
+        } finally {
+            System.setOut(original)
+        }
+
+        val logLines = captured.toString("UTF-8").lines().filter { it.isNotEmpty() }
+        val linkLine = logLines.single { it.contains("live feed link") }
+        assertTrue(linkLine.contains("e".repeat(200)))
+        assertFalse(linkLine.contains("e".repeat(201)))
+        assertTrue(linkLine.contains("(5000 chars)"))
+        assertTrue(logLines.all { it.length < 500 })
+        assertEquals(error, (drain(subscription).single() as LiveFeedMessage.Link).error)
     }
 
     @Test

@@ -53,7 +53,7 @@ class LiveFeedHub(
         val ms = clock()
         val message = next.toMessage(ms)
         AppLog.d(
-            "live feed link phase=${link.phase}->${next.phase} error=${next.error} " +
+            "live feed link phase=${link.phase}->${next.phase} error=${next.error?.truncatedForLog()} " +
                 "nextReconnectInMs=${message.nextReconnectInMs} clients=${subscribers.size}",
             TAG,
         )
@@ -211,9 +211,14 @@ class LiveFeedHub(
         fun lastLines(): Map<Char, String?> = mapOf('A' to lastA?.text, 'B' to lastB?.text, 'C' to lastC?.text)
     }
 
+    /** Log lines carry the start of an error text only; the wire message keeps the whole text. */
+    private fun String.truncatedForLog(): String =
+        if (length <= MAX_LOGGED_ERROR_CHARS) this else take(MAX_LOGGED_ERROR_CHARS) + "... ($length chars)"
+
     private companion object {
         const val TAG = "KMF-BLE"
         const val DEFAULT_METER_NAME = "KMF Meter"
+        const val MAX_LOGGED_ERROR_CHARS = 200
     }
 }
 

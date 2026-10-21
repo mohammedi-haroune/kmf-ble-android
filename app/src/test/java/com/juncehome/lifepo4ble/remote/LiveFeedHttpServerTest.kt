@@ -292,10 +292,14 @@ class LiveFeedHttpServerTest {
         silent.getOutputStream().flush()
         roomy.clientCount.first { it == 1 }
 
-        // About 1 MB of events, far more than the 16 KiB send buffer plus the tiny receive buffer can absorb, and
-        // the client never reads: the server's write blocks until the watchdog closes the socket.
-        repeat(64) { index ->
-            val error = "$index".padEnd(16_000, 'e')
+        // The kernel absorbs about the client's receive buffer plus the server's 16 KiB send buffer before a write
+        // blocks. Linux honors the tiny receive buffer set above; macOS ignores it (its loopback buffer is about
+        // 320 KB). Feed twice what can be absorbed, measured on this socket, so the client never reading always
+        // blocks the server's write until the watchdog closes the socket. Link events carry the volume because the
+        // hub logs only the start of an error text, which keeps the test output small.
+        val absorbableBytes = silent.receiveBufferSize + 64 * 1024
+        repeat(2 * absorbableBytes / ERROR_CHARS + 1) { index ->
+            val error = "$index".padEnd(ERROR_CHARS, 'e')
             roomy.onCollectionState(
                 CollectionState(CollectionPhase.ERROR, CollectionVisibility.BACKGROUND, error = error),
             )
@@ -381,6 +385,7 @@ class LiveFeedHttpServerTest {
     }
 
     private companion object {
+        const val ERROR_CHARS = 16_000
         const val FULL_A = ":A=1331,5200,1,320,150000,1800,"
         const val SHORT_A = ":A=1331,5200,1,320,1,"
         const val B = ":B=1,2,3,"
