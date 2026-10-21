@@ -274,7 +274,7 @@ object NowScreenReducer {
     ): NowDisplayState {
         val syncState = if (hasValues) NowDisplayState.Resyncing else NowDisplayState.FirstSync
         val phase: CollectionPhase = when {
-            state.autonomousCollectionConfigured -> collection?.phase ?: CollectionPhase.CONNECTING
+            state.autonomousCollectionConfigured || state.remoteMode -> collection?.phase ?: CollectionPhase.CONNECTING
             !state.collectionConfigurationLoaded && collection == null -> CollectionPhase.CONNECTING
             else -> return if (state.selectedDevice != null || hasValues) {
                 NowDisplayState.CollectionOff
@@ -608,7 +608,8 @@ object NowScreenReducer {
                 (if (connecting && dataSets == 0) "connecting" else "syncing $dataSets/2") to NowTone.Charge
             NowDisplayState.Resyncing -> "resync $dataSets/2" to NowTone.Charge
             NowDisplayState.Stale -> "stalled ${formatAge(frameAgeMs ?: 0L)}" to NowTone.Discharge
-            NowDisplayState.Reconnecting -> "dropped" to NowTone.Discharge
+            NowDisplayState.Reconnecting ->
+                (if (state.collectionState?.remoteUnreachable == true) "phone offline" else "dropped") to NowTone.Discharge
             NowDisplayState.OutOfRange -> "out of range" to NowTone.Neutral
             NowDisplayState.BluetoothOff -> "bluetooth off" to NowTone.Neutral
             NowDisplayState.CollectionError -> "error" to NowTone.Error

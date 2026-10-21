@@ -299,6 +299,83 @@ class NowScreenReducerTest {
     }
 
     @Test
+    fun remoteModeUsesRemotePhaseWithoutAutonomousCollection() {
+        val model = reduce(
+            state(
+                phase = CollectionPhase.COLLECTING,
+                configured = false,
+                remoteAddress = "h:8765",
+                currentA = -6.66,
+                powerW = -86.3,
+            ),
+        )
+
+        assertEquals(NowDisplayState.Discharging, model.displayState)
+        assertEquals("Live \u00b7 2s ago", model.pill.label)
+    }
+
+    @Test
+    fun remoteModeWithoutStateIsFirstSync() {
+        val model = reduce(
+            state(phase = null, configured = false, remoteAddress = "h:8765", hasValues = false, frameTimes = emptyList()),
+        )
+
+        assertEquals(NowDisplayState.FirstSync, model.displayState)
+    }
+
+    @Test
+    fun remoteUnreachableShowsPhoneOffline() {
+        val model = reduce(
+            state(
+                phase = CollectionPhase.ERROR,
+                configured = false,
+                remoteAddress = "h:8765",
+                nextReconnectAtMs = now + 4_000L,
+                attempt = 2,
+                remoteUnreachable = true,
+            ),
+        )
+
+        assertEquals(NowDisplayState.Reconnecting, model.displayState)
+        assertEquals("phone offline", model.dataLink.stat)
+        assertEquals(NowTone.Discharge, model.dataLink.statTone)
+        assertEquals(NowLinkRail.Retrying, model.dataLink.rail)
+        assertEquals(NowBannerAction.RetryNow, model.pill.action)
+    }
+
+    @Test
+    fun reconnectingWithoutRemoteUnreachableStillSaysDropped() {
+        val model = reduce(
+            state(
+                phase = CollectionPhase.ERROR,
+                configured = false,
+                remoteAddress = "h:8765",
+                nextReconnectAtMs = now + 4_000L,
+                attempt = 2,
+            ),
+        )
+
+        assertEquals(NowDisplayState.Reconnecting, model.displayState)
+        assertEquals("dropped", model.dataLink.stat)
+    }
+
+    @Test
+    fun homeStoppedInRemoteModeShowsPausedRetry() {
+        val model = reduce(
+            state(phase = CollectionPhase.ERROR, configured = false, remoteAddress = "h:8765", error = "Home phone stopped"),
+        )
+
+        assertEquals(NowDisplayState.CollectionError, model.displayState)
+        assertEquals("Paused \u00b7 Retry", model.pill.label)
+        assertEquals(NowBannerAction.Retry, model.pill.action)
+    }
+
+    @Test
+    fun phoneOfflineFitsDataLinkSlot() {
+        assertTrue("phone offline".length <= "bluetooth off".length)
+    }
+
+    @Test
     fun offlineStatesKeepValuesAndMarkChartGap() {
         val samples = samples(count = 10)
         listOf(
@@ -508,6 +585,8 @@ class NowScreenReducerTest {
         linkDroppedAtMs: Long? = null,
         error: String? = null,
         meterName: String? = "KMF Meter",
+        remoteAddress: String? = null,
+        remoteUnreachable: Boolean = false,
     ): BleUiState {
         val lastFrame = now - frameAgeMs
         return BleUiState(
@@ -534,6 +613,7 @@ class NowScreenReducerTest {
             hasBFrame = hasB,
             autonomousCollectionConfigured = configured,
             collectionConfigurationLoaded = true,
+            remoteAddress = remoteAddress,
             collectionState = phase?.let {
                 CollectionState(
                     phase = it,
@@ -542,6 +622,7 @@ class NowScreenReducerTest {
                     reconnectAttempt = attempt,
                     linkDroppedAtMs = linkDroppedAtMs,
                     error = error,
+                    remoteUnreachable = remoteUnreachable,
                 )
             },
         )

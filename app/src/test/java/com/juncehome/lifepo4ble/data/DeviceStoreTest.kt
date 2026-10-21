@@ -144,4 +144,19 @@ class DeviceStoreTest {
 
         assertEquals(true, store.shareOnNetwork.first())
     }
+
+    @Test
+    fun remoteAddressPersistsClearsAndSurvivesClear() = runTest {
+        val file = temporaryFolder.newFile("device.preferences_pb")
+        val dataStore = PreferenceDataStoreFactory.create(scope = backgroundScope) { file }
+        val store = DeviceStore(dataStore)
+
+        assertNull(store.remoteAddress.first())
+        store.setRemoteAddress("100.64.0.7:8765")
+        assertEquals("100.64.0.7:8765", store.remoteAddress.first())
+        store.clear()
+        assertEquals("100.64.0.7:8765", store.remoteAddress.first())
+        store.setRemoteAddress(null)
+        assertNull(store.remoteAddress.first())
+    }
 }

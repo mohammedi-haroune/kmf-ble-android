@@ -35,6 +35,15 @@ interface DeviceSnapshotStore {
         get() = flowOf(false)
 
     suspend fun setShareOnNetwork(enabled: Boolean) = Unit
+
+    /**
+     * Address of the home phone's live feed ("host:port") when this phone shows the meter through
+     * another phone; null for a direct Bluetooth link. Kept when the saved meter is cleared.
+     */
+    val remoteAddress: Flow<String?>
+        get() = flowOf(null)
+
+    suspend fun setRemoteAddress(address: String?) = Unit
 }
 
 class DeviceStore(
@@ -71,6 +80,16 @@ class DeviceStore(
     override suspend fun setShareOnNetwork(enabled: Boolean) {
         dataStore.edit { preferences ->
             preferences[SHARE_ON_NETWORK] = enabled
+        }
+    }
+
+    override val remoteAddress: Flow<String?> = dataStore.data.map { preferences ->
+        preferences[REMOTE_ADDRESS]
+    }
+
+    override suspend fun setRemoteAddress(address: String?) {
+        dataStore.edit { preferences ->
+            preferences.setOrRemove(REMOTE_ADDRESS, address)
         }
     }
 
@@ -152,5 +171,6 @@ class DeviceStore(
         val AUTONOMOUS_ENABLED = booleanPreferencesKey("autonomous_collection_enabled")
         val FIRST_RUN_COMPLETED = booleanPreferencesKey("first_run_completed")
         val SHARE_ON_NETWORK = booleanPreferencesKey("share_on_network")
+        val REMOTE_ADDRESS = stringPreferencesKey("remote_address")
     }
 }
