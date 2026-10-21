@@ -20,7 +20,11 @@ sealed interface LiveFeedMessage {
         val replay: Boolean = false,
     ) : LiveFeedMessage
 
-    /** Sent on every home [CollectionPhase] change. [nextReconnectInMs] is relative so clock skew does not matter. */
+    /**
+     * The home phone's link state: sent right after [Hello] with the current state, then whenever the home
+     * [CollectionPhase], error or next-reconnect time changes. [nextReconnectInMs] is relative so clock skew does not
+     * matter.
+     */
     data class Link(
         val ms: Long,
         val phase: CollectionPhase,
