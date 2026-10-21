@@ -38,6 +38,7 @@ The autonomous `BatteryCollectionService` / `CollectionController` is the only n
 | First sync | connected, no saved reading, waiting for both A and B | values "--", chart placeholder, blue "Syncing" pill |
 | Resyncing | connected again, saved reading exists, waiting for A and B | last values kept in full color, blue "Syncing" pill, estimate "Refreshing estimate…" |
 | Reconnecting | service retrying after a drop (1, 2, 5, 15, 30, 60 s backoff) | amber banner "Reconnecting in N s" + **Retry now** |
+| Reconnecting through another phone | the carried phone cannot reach the home phone (Device › Network) | same as Reconnecting; Data link reads "phone offline" instead of "dropped" |
 | Out of range | `WAITING_FOR_DEVICE` | neutral banner, no button |
 | Collection error | `ERROR` | red banner with reason + **Retry** |
 | Collection off | `STOPPED` | neutral banner + **Start** |
@@ -46,7 +47,7 @@ In every offline state the last values stay in full color (disconnects are frequ
 
 Data link while syncing or while the link is down: the tick strip gives way to one rail from the label to the state text (canvas page "Data link · offline options", option D). A soft glow sweeps it while the app gets the link going by itself (blue while syncing, fast amber when reconnecting, slow grey when out of range); it stands still when the user must act (red after an error, dark when collection or Bluetooth is off, or no meter is set up). Reduced motion parks the glow in the middle. While frames flow, every tick is full height (never small dots): missed seconds are faint red bars, and seconds before the first frame show the rail track so bars fill in from the right. Ticks and rail both run from the label right up to the state text (no fixed label slot), so the strip width follows the label length.
 
-Layout top to bottom: header (meter name button → Device, status pill) · optional banner · SoC (big) with voltage and Ah aligned on the last text baseline · 10-segment battery bar · flow card (cell icon, state label, "2h 54m · 17:26", power W and current A on the right) · power chart last 15 min (blue above zero, amber below, end dot) · Data link card (one fixed-height line in every state: 30 ticks plus a short state label such as "58/60 · steady", "syncing 1/2", "stalled 15s", "dropped", "out of range", "error", "off") · "Meter totals in … · out … kWh" line.
+Layout top to bottom: header (meter name button → Device, status pill) · optional banner · SoC (big) with voltage and Ah aligned on the last text baseline · 10-segment battery bar · flow card (cell icon, state label, "2h 54m · 17:26", power W and current A on the right) · power chart last 15 min (blue above zero, amber below, end dot) · Data link card (one fixed-height line in every state: 30 ticks plus a short state label such as "58/60 · steady", "syncing 1/2", "stalled 15s", "dropped", "phone offline", "out of range", "error", "off") · "Meter totals in … · out … kWh" line.
 
 ## First run
 
@@ -55,6 +56,15 @@ Bluetooth off (any time, not numbered) → 1 Nearby devices permission → 2 Fin
 ## Device tab
 
 Background collection card with switch (status, last sample age, cadences 30 s open / 5 min background) · meter card (name, address, Android pairing, wakes app when nearby, last reading, Change / Forget) · permissions list · Diagnostics "One-off test connection" (disabled with explanation while collecting; when running shows raw frame log, Clear log, Disconnect). States: Collecting, Collection off, Test running, Not paired.
+
+Network card (between Meter and Permissions; canvas board `F-Device.dc.html`, Tweaks › network):
+
+- Overline "NETWORK", then **Share on network** with a switch and one status line ("Sharing · port 8765" or "Off"), two address slots (one line each, mono, "--" when missing, the other phone's user types them so they are never cut short) and a viewer count slot as wide as "999 viewers" ("0 viewers", "1 viewer", "12 viewers"). Addresses are primary text while sharing, tertiary when off. Worst case on the canvas: two `100.100.100.100`, `12 viewers`.
+- Hairline, then **Connect through another phone**: address field "Home phone address" (56 high, mono, placeholder `192.168.1.23`, a 40 character host stays inside the field), one button that reads Connect or Disconnect (fixed to the width of "Disconnect"), and one status line with a dot: "Not connected" (neutral), "Connecting…" (neutral), "Connected · <meter name>" (live green), "Phone offline · retry in 5 s" (amber), "Home phone: ..." for the home phone's own state, or the reason the typed address was refused (red, wins over the link status).
+- Note, always shown: "No password yet. Anyone who can reach this phone's address can read its live data (read-only)."
+- Every slot keeps one size and position for all values and states; the card has the same height in all four canvas states (335 px). At font scale 1.1 and up the layout stacks once, whatever the values: addresses take the full width with the viewer count on its own line below them, and the field sits above a full-width button (419 px on the canvas, Tweaks › networkLayout).
+- Remote connected (the other phone's meter drives Now): the switch is off and locked (sharing needs this phone's own Bluetooth collection), the field is read-only with the saved `host:port`, the button reads Disconnect. Elsewhere on the tab nothing moves: Background collection is off and its switch locked with "Off while connected through another phone.", the Meter card's Pair / Change / Forget actions are disabled (dimmed text, same layout), and the test card says "Disconnect from the other phone first." with Connect once disabled. The canvas draws the Readings card (its current shape) the same way: Off selected, rows locked, same status text.
+- States on the canvas: Bluetooth sharing on, Bluetooth sharing off, Remote connected, Remote phone offline (the header pill shows "Reconnecting · N s" there).
 
 ## Trends tab
 
