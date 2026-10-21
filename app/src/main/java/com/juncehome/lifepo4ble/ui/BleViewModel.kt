@@ -456,8 +456,15 @@ class BleViewModel(
     /** Now tab "Retry now" / "Retry": skip the service's reconnect backoff. */
     fun retryCollectionNow() {
         val link = remoteLink
-        if (remoteAddress != null && link != null) {
+        val address = remoteAddress
+        if (address != null && link != null) {
             AppLog.d("Remote: retry requested phase=${mutableUiState.value.collectionState?.phase}", TAG)
+            if (link.state.value == null && currentAppVisibility == CollectionVisibility.FOREGROUND) {
+                // A visible app with no link state means the loop is not running (it died): Retry starts it again,
+                // otherwise reconnectNow() has nothing to wake.
+                AppLog.d("Remote: retry restarts the link because it is not running host=${address.display}", TAG)
+                startRemoteLink(address, link)
+            }
             link.reconnectNow()
             return
         }

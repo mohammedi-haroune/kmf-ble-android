@@ -1524,11 +1524,53 @@ class BleViewModelTest {
         try {
             viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
             advanceUntilIdle()
+            // A running link publishes its state; only a stopped or dead one has none.
+            link.state.value = collectionState(CollectionPhase.ERROR)
 
             viewModel.retryCollectionNow()
 
             assertEquals(listOf("start h:8765", "reconnectNow"), link.calls)
             assertEquals(emptyList<String>(), commander.commands)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun retryInRemoteModeRestartsADeadLinkBeforeReconnecting() = runTest {
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, FakeDeviceStore(initialRemoteAddress = "h:8765"), link)
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            advanceUntilIdle()
+            // The loop died: the link reports no state and no longer runs.
+            assertNull(link.state.value)
+
+            viewModel.retryCollectionNow()
+
+            assertEquals(listOf("start h:8765", "start h:8765", "reconnectNow"), link.calls)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun retryInRemoteModeDoesNotStartTheLinkInTheBackground() = runTest {
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, FakeDeviceStore(initialRemoteAddress = "h:8765"), link)
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            viewModel.onAppVisibilityChanged(CollectionVisibility.BACKGROUND)
+            advanceUntilIdle()
+            assertEquals(listOf("start h:8765", "stop"), link.calls)
+
+            viewModel.retryCollectionNow()
+
+            assertEquals(listOf("start h:8765", "stop", "reconnectNow"), link.calls)
         } finally {
             viewModelScope.cancel()
         }
