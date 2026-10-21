@@ -120,7 +120,9 @@ class LiveFeedHttpServer(
         }
         socket.closeQuietly()
         job?.cancel()
-        val open = connections.toList()
+        // toTypedArray is a safe snapshot; toList reads size and then the first element, which a connection that
+        // removes itself in between turns into a NoSuchElementException.
+        val open = connections.toTypedArray()
         open.forEach { it.close() }
         AppLog.d("live feed server stopped port=$boundPort closedConnections=${open.size}", TAG)
     }
