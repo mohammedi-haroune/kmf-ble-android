@@ -64,6 +64,18 @@ data: {"ms":1792591400000,"phase":"ERROR","error":"GATT 8","nextReconnectInMs":5
 `link` follows the home phone: it is sent right after `hello`, then whenever the phase, the error text or the next
 reconnect time changes.
 
+When the home phone stops serving on purpose, it sends one last `link` with phase `STOPPED` to every open stream
+and then closes the streams. The `error` text says what was turned off: `Sharing is off on the home phone` (Share on
+network switched off) or `Collection is off on the home phone` (background collection stopped). A reader should treat
+that as a pause rather than a lost connection: the carried phone shows "Paused" and tries again slowly. The last
+event is written after the messages already queued and within 300 ms of the stop; a stream whose peer stopped reading
+is closed without it, so a stream that just ends is still possible.
+
+```
+event: link
+data: {"ms":1792591500000,"phase":"STOPPED","error":"Sharing is off on the home phone","nextReconnectInMs":null}
+```
+
 A `: ping` comment is sent every 15 s so both ends notice a dead connection and idle timers (NAT, VPN) do not close
 it. Readers must ignore comment lines. The server closes a stream when the client is too slow to keep up, when a write
 to it stays blocked for 30 s (the client stopped reading), or when a newer client takes its place at the cap;

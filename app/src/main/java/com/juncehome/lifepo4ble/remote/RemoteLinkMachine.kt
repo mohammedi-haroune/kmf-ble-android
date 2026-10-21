@@ -30,6 +30,9 @@ class RemoteLinkMachine(private val address: RemoteAddress) {
     private var failureStreak = 0
     private var linkDroppedAtMs: Long? = null
 
+    /** The error text the home phone gave with its last STOPPED link; null when it gave none (or sent a hello). */
+    private var homeStoppedError: String? = null
+
     var state: CollectionState = stateOf(CollectionPhase.STOPPED)
         private set
 
@@ -86,6 +89,8 @@ class RemoteLinkMachine(private val address: RemoteAddress) {
         clockOffsetMs = nowMs - hello.ms
         meterName = hello.meterName
         homePhase = hello.phase
+        // A hello has no error field: a stopped home phone behind a hello gets the default text.
+        homeStoppedError = null
         resetBackoff()
         state = homeState(hello.phase, error = null, nextReconnectAtMs = null)
         AppLog.d(
@@ -105,6 +110,7 @@ class RemoteLinkMachine(private val address: RemoteAddress) {
     private fun onLink(link: LiveFeedMessage.Link, nowMs: Long): List<TimedBleEvent> {
         val previousPhase = homePhase
         homePhase = link.phase
+        homeStoppedError = link.error
         state = homeState(link.phase, link.error, link.nextReconnectInMs?.let { nowMs + it })
         if (previousPhase != link.phase) {
             AppLog.d(
@@ -119,7 +125,7 @@ class RemoteLinkMachine(private val address: RemoteAddress) {
         return emptyList()
     }
 
-    /** The home phone's own state; a stopped home phone is a paused link, not a failure. */
+    /** The home phone's own state; a stopped home phone is a paused link ([pausedState]), not a failure. */
     private fun homeState(phase: CollectionPhase, error: String?, nextReconnectAtMs: Long?): CollectionState =
         if (phase == CollectionPhase.STOPPED) {
             pausedState()
@@ -127,14 +133,23 @@ class RemoteLinkMachine(private val address: RemoteAddress) {
             stateOf(phase, error = error, nextReconnectAtMs = nextReconnectAtMs)
         }
 
-    /** The home phone turned collection off: nothing to count down, nothing unreachable. */
-    private fun pausedState() = stateOf(CollectionPhase.ERROR, error = HOME_STOPPED_ERROR)
+    /**
+     * The home phone turned collection or sharing off on purpose: nothing to count down, nothing unreachable. The
+     * error says what was turned off ([homeStoppedError], else the collection-off text) and [CollectionState.homeStopped]
+     * marks the state so screens do not have to compare text.
+     */
+    private fun pausedState() = stateOf(
+        CollectionPhase.ERROR,
+        error = homeStoppedError?.takeIf { it.isNotBlank() } ?: LiveFeedStopReason.COLLECTION_OFF,
+        homeStopped = true,
+    )
 
     private fun stateOf(
         phase: CollectionPhase,
         error: String? = null,
         nextReconnectAtMs: Long? = null,
         remoteUnreachable: Boolean = false,
+        homeStopped: Boolean = false,
     ) = CollectionState(
         phase = phase,
         visibility = CollectionVisibility.FOREGROUND,
@@ -144,6 +159,7 @@ class RemoteLinkMachine(private val address: RemoteAddress) {
         reconnectAttempt = failureStreak,
         linkDroppedAtMs = linkDroppedAtMs,
         remoteUnreachable = remoteUnreachable,
+        homeStopped = homeStopped,
     )
 
     private fun device() = ScannedDevice(name = meterName, address = address.id, rssi = 0, serviceUuids = emptyList())
@@ -159,9 +175,6 @@ class RemoteLinkMachine(private val address: RemoteAddress) {
         if (length <= MAX_LOGGED_ERROR_CHARS) this else take(MAX_LOGGED_ERROR_CHARS) + "..."
 
     companion object {
-        /** The [CollectionState.error] of the paused state: the home phone turned collection off on purpose. */
-        const val HOME_STOPPED_ERROR = "Collection is off on the home phone"
-
         private const val TAG = "KMF-BLE"
         private const val LINE_TERMINATOR = "\r\n"
         private const val PAUSED_RETRY_MS = 15_000L

@@ -4,7 +4,7 @@ import com.juncehome.lifepo4ble.collection.CollectionCadence
 import com.juncehome.lifepo4ble.collection.CollectionPhase
 import com.juncehome.lifepo4ble.protocol.FrameLogEntry
 import com.juncehome.lifepo4ble.protocol.PacketDirection
-import com.juncehome.lifepo4ble.remote.RemoteLinkMachine
+import com.juncehome.lifepo4ble.remote.LiveFeedStopReason
 import com.juncehome.lifepo4ble.ui.BleUiState
 import com.juncehome.lifepo4ble.ui.ConnectionState
 import com.juncehome.lifepo4ble.ui.firstrun.FirstRunNotice
@@ -362,7 +362,7 @@ object DeviceScreenReducer {
             CollectionPhase.WAITING_FOR_DEVICE -> "Home phone: meter out of range" to DeviceTone.Neutral
             CollectionPhase.BLUETOOTH_OFF -> "Home phone: Bluetooth off" to DeviceTone.Warning
             CollectionPhase.ERROR -> when {
-                link.error == RemoteLinkMachine.HOME_STOPPED_ERROR -> link.error to DeviceTone.Warning
+                link.homeStopped -> (link.error ?: LiveFeedStopReason.COLLECTION_OFF) to DeviceTone.Warning
                 link.nextReconnectAtMs != null -> "Home phone reconnecting to meter" to DeviceTone.Warning
                 else -> "Home phone error" + (link.error?.let { " $DOT $it" } ?: "") to DeviceTone.Error
             }

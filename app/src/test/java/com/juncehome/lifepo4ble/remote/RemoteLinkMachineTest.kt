@@ -140,12 +140,67 @@ class RemoteLinkMachineTest {
         assertEquals(CollectionPhase.COLLECTING, machine.state.phase)
 
         val events = machine.onMessage(
-            link(CollectionPhase.STOPPED, error = "ignored", nextReconnectInMs = 5_000L),
+            link(CollectionPhase.STOPPED, error = "Sharing is off on the home phone", nextReconnectInMs = 5_000L),
             nowMs = 3_000L,
         )
 
         assertTrue(events.isEmpty())
+        assertPaused(error = "Sharing is off on the home phone")
+    }
+
+    @Test
+    fun homeStoppedWithoutErrorTextUsesTheCollectionOffText() {
+        machine.onMessage(hello(), nowMs = 1_000L)
+
+        machine.onMessage(link(CollectionPhase.STOPPED), nowMs = 2_000L)
+
         assertPaused()
+    }
+
+    @Test
+    fun helloWhileHomeStoppedHasNoErrorFieldSoItUsesTheCollectionOffText() {
+        machine.onMessage(hello(phase = CollectionPhase.STOPPED), nowMs = 1_000L)
+
+        assertPaused()
+    }
+
+    @Test
+    fun streamEndAfterAStoppedLinkKeepsTheHomeProvidedText() {
+        machine.onMessage(hello(), nowMs = 1_000L)
+        machine.onMessage(link(CollectionPhase.STOPPED, error = "Sharing is off on the home phone"), nowMs = 2_000L)
+
+        machine.onStreamEnded("Home phone closed the stream", nowMs = 2_050L)
+
+        assertPaused(error = "Sharing is off on the home phone")
+        machine.onConnectAttempt(nowMs = 17_000L)
+        machine.onStreamEnded("connection refused", nowMs = 17_100L)
+        assertPaused(error = "Sharing is off on the home phone")
+    }
+
+    @Test
+    fun homeStoppedClearsWhenTheHomePhoneResumes() {
+        machine.onMessage(hello(), nowMs = 1_000L)
+        machine.onMessage(link(CollectionPhase.STOPPED, error = "Sharing is off on the home phone"), nowMs = 2_000L)
+        assertTrue(machine.state.homeStopped)
+
+        machine.onMessage(hello(ms = 20_000L), nowMs = 20_000L)
+
+        assertFalse(machine.state.homeStopped)
+        assertEquals(CollectionPhase.COLLECTING, machine.state.phase)
+        assertNull(machine.state.error)
+    }
+
+    @Test
+    fun onlyThePausedStateIsMarkedHomeStopped() {
+        assertFalse(machine.state.homeStopped)
+        machine.onConnectAttempt(nowMs = 0L)
+        assertFalse(machine.state.homeStopped)
+        machine.onMessage(hello(), nowMs = 1_000L)
+        assertFalse(machine.state.homeStopped)
+        machine.onMessage(link(CollectionPhase.ERROR, error = "GATT 8", nextReconnectInMs = 5_000L), nowMs = 2_000L)
+        assertFalse(machine.state.homeStopped)
+        machine.onStreamEnded("timeout", nowMs = 3_000L)
+        assertFalse(machine.state.homeStopped)
     }
 
     @Test
@@ -242,9 +297,10 @@ class RemoteLinkMachineTest {
         assertEquals(1, machine.state.reconnectAttempt)
     }
 
-    private fun assertPaused() {
+    private fun assertPaused(error: String = "Collection is off on the home phone") {
         assertEquals(CollectionPhase.ERROR, machine.state.phase)
-        assertEquals("Collection is off on the home phone", machine.state.error)
+        assertEquals(error, machine.state.error)
+        assertTrue(machine.state.homeStopped)
         assertNull(machine.state.nextReconnectAtMs)
         assertFalse(machine.state.remoteUnreachable)
         assertEquals(0, machine.state.reconnectAttempt)

@@ -33,6 +33,15 @@ sealed interface LiveFeedMessage {
     ) : LiveFeedMessage
 }
 
+/**
+ * The `error` text of a [LiveFeedMessage.Link] with phase [CollectionPhase.STOPPED]: what the home phone turned off on
+ * purpose. The carried phone shows it as the paused state; the text is also the wire contract for other readers.
+ */
+object LiveFeedStopReason {
+    const val SHARING_OFF = "Sharing is off on the home phone"
+    const val COLLECTION_OFF = "Collection is off on the home phone"
+}
+
 /** Snapshot served by `GET /v1/now`: the last line of each type (A, B, C) in the current home session, null when none. */
 data class LiveFeedNow(
     val ms: Long,

@@ -267,6 +267,7 @@ class DeviceScreenReducerTest {
         error: String? = null,
         nextAt: Long? = null,
         unreachable: Boolean = false,
+        homeStopped: Boolean = false,
     ) = CollectionState(
         phase = phase,
         visibility = CollectionVisibility.FOREGROUND,
@@ -274,6 +275,7 @@ class DeviceScreenReducerTest {
         error = error,
         nextReconnectAtMs = nextAt,
         remoteUnreachable = unreachable,
+        homeStopped = homeStopped,
     )
 
     @Test
@@ -372,9 +374,13 @@ class DeviceScreenReducerTest {
         assertEquals("Home phone reconnecting to meter", status(homeRetry))
         assertEquals(DeviceTone.Warning, tone(homeRetry))
 
-        val homeOff = homeLink(CollectionPhase.ERROR, error = "Collection is off on the home phone")
+        val homeOff = homeLink(CollectionPhase.ERROR, error = "Collection is off on the home phone", homeStopped = true)
         assertEquals("Collection is off on the home phone", status(homeOff))
         assertEquals(DeviceTone.Warning, tone(homeOff))
+
+        val sharingOff = homeLink(CollectionPhase.ERROR, error = "Sharing is off on the home phone", homeStopped = true)
+        assertEquals("Sharing is off on the home phone", status(sharingOff))
+        assertEquals(DeviceTone.Warning, tone(sharingOff))
 
         assertEquals("Home phone: meter out of range", status(homeLink(CollectionPhase.WAITING_FOR_DEVICE)))
         assertEquals("Home phone: Bluetooth off", status(homeLink(CollectionPhase.BLUETOOTH_OFF)))
@@ -383,6 +389,15 @@ class DeviceScreenReducerTest {
         val homeError = homeLink(CollectionPhase.ERROR, error = "boom")
         assertEquals("Home phone error \u00B7 boom", status(homeError))
         assertEquals(DeviceTone.Error, tone(homeError))
+    }
+
+    @Test
+    fun pausedHomeIsDetectedByTheFlagNotByTheErrorText() {
+        fun status(link: CollectionState?) = reduce(remote(link)).network.remoteStatus
+
+        val lookAlike = homeLink(CollectionPhase.ERROR, error = "Sharing is off on the home phone")
+
+        assertEquals("Home phone error \u00B7 Sharing is off on the home phone", status(lookAlike))
     }
 
     @Test

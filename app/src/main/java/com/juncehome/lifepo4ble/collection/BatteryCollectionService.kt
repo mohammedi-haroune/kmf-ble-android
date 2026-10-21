@@ -13,6 +13,8 @@ import com.juncehome.lifepo4ble.BleApplication
 import com.juncehome.lifepo4ble.platform.BluetoothAdapterStateObserver
 import com.juncehome.lifepo4ble.remote.LiveFeedHttpServer
 import com.juncehome.lifepo4ble.remote.LiveFeedHub
+import com.juncehome.lifepo4ble.remote.LiveFeedMessage
+import com.juncehome.lifepo4ble.remote.LiveFeedStopReason
 import com.juncehome.lifepo4ble.remote.NetworkAddresses
 import com.juncehome.lifepo4ble.remote.SHARING_COULD_NOT_START
 import com.juncehome.lifepo4ble.remote.SharingStatus
@@ -216,8 +218,10 @@ class BatteryCollectionService : Service() {
         controller.close()
         statusRelay.publish(controller.state.value)
         sharingServer?.let { server ->
-            // Socket calls stay off the main thread; stop() is quick and idempotent.
-            runBlocking(Dispatchers.IO) { server.stop() }
+            // Socket calls stay off the main thread. The final message goes out before the scope is cancelled
+            // (cancelling would end the viewers' streams first); the flush waits at most 300 ms, usually a few ms.
+            AppLog.d("live feed server stopping on service destroy", TAG)
+            runBlocking(Dispatchers.IO) { server.stop(stoppedLink(LiveFeedStopReason.COLLECTION_OFF)) }
             sharingServer = null
         }
         serviceScope.cancel()
@@ -293,9 +297,15 @@ class BatteryCollectionService : Service() {
             publishSharing(failedSharing(SHARING_COULD_NOT_START))
         } finally {
             sharingServer = null
-            withContext(NonCancellable + Dispatchers.IO) { server.stop() }
+            // Sharing switched off (or failed): viewers get the paused state, not "phone offline". A no-op when
+            // onDestroy already stopped the server.
+            withContext(NonCancellable + Dispatchers.IO) { server.stop(stoppedLink(LiveFeedStopReason.SHARING_OFF)) }
         }
     }
+
+    /** The last event viewers get before the server closes their streams. */
+    private fun stoppedLink(reason: String) =
+        LiveFeedMessage.Link(System.currentTimeMillis(), CollectionPhase.STOPPED, reason, null)
 
     /** Binds the server off the main thread; returns the failed status, or null once it is listening. */
     private suspend fun startServer(server: LiveFeedHttpServer, feedScope: CoroutineScope): SharingStatus? {

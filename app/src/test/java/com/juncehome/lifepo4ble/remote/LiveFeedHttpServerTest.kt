@@ -53,6 +53,7 @@ class LiveFeedHttpServerTest {
         pingIntervalMs: Long = 15_000L,
         requestTimeoutMs: Long = 10_000L,
         writeStallTimeoutMs: Long = 30_000L,
+        finalLinkGraceMs: Long = 300L,
     ): LiveFeedHttpServer {
         val server = LiveFeedHttpServer(
             hub = hub,
@@ -62,6 +63,7 @@ class LiveFeedHttpServerTest {
             bindAddress = loopback,
             requestTimeoutMs = requestTimeoutMs,
             writeStallTimeoutMs = writeStallTimeoutMs,
+            finalLinkGraceMs = finalLinkGraceMs,
         )
         servers += server
         server.start(scope)
@@ -113,6 +115,16 @@ class LiveFeedHttpServerTest {
                 val line = readLine() ?: error("stream ended before the next event")
                 val event = sse.offer(line) ?: continue
                 return LiveFeedJson.decode(event.name, event.data) ?: error("undecodable event $event")
+            }
+        }
+
+        /** Every message up to the server closing the connection; fails the test on a reset. */
+        fun messagesUntilEof(): List<LiveFeedMessage> {
+            val messages = mutableListOf<LiveFeedMessage>()
+            while (true) {
+                val line = readLine() ?: return messages
+                val event = sse.offer(line) ?: continue
+                messages += LiveFeedJson.decode(event.name, event.data) ?: error("undecodable event $event")
             }
         }
 
@@ -332,6 +344,94 @@ class LiveFeedHttpServerTest {
 
         assertEquals(0, hub.clientCount.value)
         client.awaitEof()
+        assertThrows(java.net.ConnectException::class.java) { Socket(loopback, server.boundPort) }
+    }
+
+    @Test
+    fun stopWithAFinalLinkWritesItToEveryStreamBeforeClosing() = timed {
+        val server = startServer()
+        val clientA = Client(server.boundPort, get("/v1/live"))
+        val clientB = Client(server.boundPort, get("/v1/live"))
+        listOf(clientA, clientB).forEach { client ->
+            assertTrue(client.nextMessage() is LiveFeedMessage.Hello)
+            assertTrue(client.nextMessage() is LiveFeedMessage.Link)
+        }
+        assertEquals(2, hub.clientCount.value)
+
+        val finalLink = LiveFeedMessage.Link(
+            ms = 2_000L,
+            phase = CollectionPhase.STOPPED,
+            error = "Sharing is off on the home phone",
+            nextReconnectInMs = null,
+        )
+        server.stop(finalLink)
+
+        listOf(clientA, clientB).forEach { client ->
+            assertEquals(listOf<LiveFeedMessage>(finalLink), client.messagesUntilEof())
+        }
+        assertEquals(0, hub.clientCount.value)
+        assertThrows(java.net.ConnectException::class.java) { Socket(loopback, server.boundPort) }
+    }
+
+    @Test
+    fun stopWithAFinalLinkComesAfterTheMessagesAlreadyQueued() = timed {
+        feedAbc()
+        val server = startServer()
+        val client = Client(server.boundPort, get("/v1/live"))
+        assertTrue(client.nextMessage() is LiveFeedMessage.Hello)
+        hub.onBleEvent(notify(SHORT_A + "\r\n"))
+
+        val finalLink = LiveFeedMessage.Link(3_000L, CollectionPhase.STOPPED, "Collection is off on the home phone", null)
+        server.stop(finalLink)
+
+        val rest = client.messagesUntilEof()
+        assertEquals(finalLink, rest.last())
+        assertTrue(
+            "the queued frame is written before the final link: $rest",
+            rest.dropLast(1).filterIsInstance<LiveFeedMessage.Frame>().any { it.line == SHORT_A },
+        )
+    }
+
+    @Test
+    fun stopWithoutAFinalLinkWritesNothingMore() = timed {
+        val server = startServer()
+        val client = Client(server.boundPort, get("/v1/live"))
+        assertTrue(client.nextMessage() is LiveFeedMessage.Hello)
+        assertTrue(client.nextMessage() is LiveFeedMessage.Link)
+
+        server.stop()
+
+        assertEquals(emptyList<LiveFeedMessage>(), client.messagesUntilEof())
+    }
+
+    @Test
+    fun stopWithAFinalLinkIsBoundedWhenAPeerStoppedReading() = timed {
+        val roomy = LiveFeedHub(clock = { 1_000L }, clientBufferCapacity = 1_000)
+        val server = startServer(hub = roomy, finalLinkGraceMs = 200L)
+        val silent = Socket().also {
+            it.receiveBufferSize = 1_024
+            it.soTimeout = 5_000
+            clients += it
+            it.connect(InetSocketAddress(loopback, server.boundPort))
+        }
+        silent.getOutputStream().write(get("/v1/live").toByteArray(Charsets.ISO_8859_1))
+        silent.getOutputStream().flush()
+        roomy.clientCount.first { it == 1 }
+        // Same volume as the write stall test: the client never reads, so the server's write blocks.
+        val absorbableBytes = silent.receiveBufferSize + 64 * 1024
+        repeat(2 * absorbableBytes / ERROR_CHARS + 1) { index ->
+            val error = "$index".padEnd(ERROR_CHARS, 'e')
+            roomy.onCollectionState(
+                CollectionState(CollectionPhase.ERROR, CollectionVisibility.BACKGROUND, error = error),
+            )
+        }
+
+        val startNs = System.nanoTime()
+        server.stop(LiveFeedMessage.Link(2_000L, CollectionPhase.STOPPED, "Sharing is off on the home phone", null))
+        val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+
+        assertTrue("stop took ${elapsedMs}ms; the flush grace must bound it", elapsedMs < 2_000L)
+        assertEquals(0, roomy.clientCount.value)
         assertThrows(java.net.ConnectException::class.java) { Socket(loopback, server.boundPort) }
     }
 

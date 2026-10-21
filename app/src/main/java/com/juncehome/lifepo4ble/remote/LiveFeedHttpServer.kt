@@ -12,6 +12,8 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.cancellation.CancellationException
@@ -44,7 +46,8 @@ import org.json.JSONException
  *
  * Every connection is served by its own coroutine on [dispatcher]. A failure on one connection (write error, client
  * hang-up, bad request) only ends that connection. Call [stop] to release the port; cancelling the scope given to
- * [start] does not unblock the blocking socket calls by itself.
+ * [start] does not unblock the blocking socket calls by itself. `stop(finalLink)` first hands every open stream one
+ * last `link` event and waits at most [finalLinkGraceMs] in total for the streams to write it.
  *
  * [requestTimeoutMs] bounds how long a client may take to send its request line and headers (at most 8 KiB).
  */
@@ -57,6 +60,7 @@ class LiveFeedHttpServer(
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val requestTimeoutMs: Long = 10_000L,
     private val writeStallTimeoutMs: Long = 30_000L,
+    private val finalLinkGraceMs: Long = DEFAULT_FINAL_LINK_GRACE_MS,
 ) {
     private val lock = Any()
     private var serverSocket: ServerSocket? = null
@@ -70,6 +74,7 @@ class LiveFeedHttpServer(
     init {
         require(maxClients >= 1) { "maxClients must be at least 1" }
         require(writeStallTimeoutMs > 0L) { "writeStallTimeoutMs must be positive" }
+        require(finalLinkGraceMs >= 0L) { "finalLinkGraceMs must not be negative" }
     }
 
     /** The port the server listens on, valid after [start] (so tests can pass port 0); -1 before the first start. */
@@ -104,8 +109,15 @@ class LiveFeedHttpServer(
         }
     }
 
-    /** Closes the server socket and every open connection, and releases their hub subscriptions. */
-    fun stop() {
+    /**
+     * Closes the server socket and every open connection, and releases their hub subscriptions.
+     *
+     * With [finalLink] every open live stream first gets it as its last event, after the messages already queued for
+     * that stream, so a viewer can tell a deliberate stop from a lost connection. The flush is bounded by
+     * [finalLinkGraceMs] in total: a stream whose peer stopped reading is closed without it. Call this off the main
+     * thread; without [finalLink] it returns at once.
+     */
+    fun stop(finalLink: LiveFeedMessage.Link? = null) {
         val socket: ServerSocket
         val job: Job?
         synchronized(lock) {
@@ -114,17 +126,42 @@ class LiveFeedHttpServer(
             serverSocket = null
             serverJob = null
         }
+        // No new client from here on, also during the flush.
+        socket.closeQuietly()
+        val flushed = if (finalLink != null) flushFinalLink(finalLink) else null
         synchronized(streamsLock) {
             streams.forEach { it.end("server stopped") }
             streams.clear()
         }
-        socket.closeQuietly()
         job?.cancel()
         // toTypedArray is a safe snapshot; toList reads size and then the first element, which a connection that
         // removes itself in between turns into a NoSuchElementException.
         val open = connections.toTypedArray()
         open.forEach { it.close() }
-        AppLog.d("live feed server stopped port=$boundPort closedConnections=${open.size}", TAG)
+        AppLog.d(
+            "live feed server stopped port=$boundPort closedConnections=${open.size} " +
+                "finalLink=${finalLink?.let { "${it.phase} error=${it.error}" }} flushedStreams=${flushed ?: "-"}",
+            TAG,
+        )
+    }
+
+    /** Asks every open stream to write [link] and end; returns "written/open". Waits at most [finalLinkGraceMs]. */
+    private fun flushFinalLink(link: LiveFeedMessage.Link): String {
+        val text = encodeLiveFeedEvent(link) ?: return "not encodable"
+        val open = synchronized(streamsLock) { streams.toTypedArray() }
+        open.forEach { it.finish(text) }
+        val deadlineNs = System.nanoTime() + finalLinkGraceMs * NANOS_PER_MS
+        var written = 0
+        try {
+            for (live in open) {
+                val remainingNs = (deadlineNs - System.nanoTime()).coerceAtLeast(0L)
+                if (live.finished.await(remainingNs, TimeUnit.NANOSECONDS)) written += 1
+            }
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            AppLog.w("live feed final link flush interrupted", TAG)
+        }
+        return "$written/${open.size}"
     }
 
     private suspend fun acceptLoop(server: ServerSocket, scope: CoroutineScope) {
@@ -208,6 +245,7 @@ class LiveFeedHttpServer(
             stream(exchange, live)
         } finally {
             release(live)
+            live.finished.countDown()
         }
     }
 
@@ -281,16 +319,23 @@ class LiveFeedHttpServer(
     /** Returns why the stream ended. An IOException from a write propagates to the caller. */
     private suspend fun pump(live: LiveStream, pings: ReceiveChannel<Unit>): String {
         while (true) {
-            val next = select<ChannelResult<LiveFeedMessage>?> {
-                live.subscription.messages.onReceiveCatching { it }
-                pings.onReceive { null }
+            // select prefers the first ready clause, so the messages already queued go out before a final link.
+            val step = select<PumpStep> {
+                live.subscription.messages.onReceiveCatching { PumpStep.Message(it) }
+                live.finishRequests.onReceive { PumpStep.Finish }
+                pings.onReceive { PumpStep.Ping }
             }
-            if (next == null) {
-                live.write(SseFormat.comment("ping"))
-                continue
+            when (step) {
+                PumpStep.Ping -> live.write(SseFormat.comment("ping"))
+                PumpStep.Finish -> {
+                    live.finalText()?.let { live.write(it) }
+                    return live.endReason ?: "server stopped (final link sent)"
+                }
+                is PumpStep.Message -> {
+                    val message = step.result.getOrNull() ?: return live.endReason ?: "dropped by hub (slow client)"
+                    live.write(encodeLiveFeedEvent(message) ?: continue)
+                }
             }
-            val message = next.getOrNull() ?: return live.endReason ?: "dropped by hub (slow client)"
-            live.write(encodeLiveFeedEvent(message) ?: continue)
         }
     }
 
@@ -431,6 +476,21 @@ class LiveFeedHttpServer(
         private val openedNs = System.nanoTime()
         private val reason = AtomicReference<String?>(null)
         private val writeStartedNs = AtomicLong(0L)
+        private val finalMessage = AtomicReference<String?>(null)
+
+        /** Signals the pump that [finalText] is ready; conflated, so asking twice is harmless. */
+        val finishRequests = Channel<Unit>(Channel.CONFLATED)
+
+        /** Counted down once the stream is over (its socket is closed), whatever the reason. */
+        val finished = CountDownLatch(1)
+
+        /** Hands the pump [text] to write after everything already queued, then end the stream. */
+        fun finish(text: String) {
+            finalMessage.set(text)
+            finishRequests.trySend(Unit)
+        }
+
+        fun finalText(): String? = finalMessage.get()
 
         /** Why the stream was ended from outside the pump (eviction, stall, hang-up, stop), or null. */
         val endReason: String? get() = reason.get()
@@ -461,6 +521,15 @@ class LiveFeedHttpServer(
         }
     }
 
+    private sealed interface PumpStep {
+        class Message(val result: ChannelResult<LiveFeedMessage>) : PumpStep
+
+        object Ping : PumpStep
+
+        /** The server is stopping and wants [LiveStream.finalText] written as the last event. */
+        object Finish : PumpStep
+    }
+
     private sealed interface RequestHead {
         class Request(val method: String, val path: String) : RequestHead
 
@@ -474,6 +543,9 @@ class LiveFeedHttpServer(
 
     companion object {
         const val DEFAULT_PORT = 8765
+
+        /** How long [stop] waits in total for open streams to write their final link. */
+        const val DEFAULT_FINAL_LINK_GRACE_MS = 300L
 
         private const val PATH_LIVE = "/v1/live"
         private const val PATH_NOW = "/v1/now"
