@@ -9,15 +9,20 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -45,9 +50,11 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
@@ -102,6 +109,7 @@ import com.juncehome.lifepo4ble.ui.theme.KmfTheme
 import com.juncehome.lifepo4ble.ui.theme.tint
 import java.time.ZoneId
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 
 private const val TAG = "KMF-BLE"
 
@@ -109,8 +117,16 @@ private const val TAG = "KMF-BLE"
 private const val WIDEST_VIEWERS = "999 viewers"
 private const val WIDEST_REMOTE_ACTION = "Disconnect"
 
-/** From this font scale on the address field and its button stack; decided by the setting, never by a value. */
-private const val STACKED_FONT_SCALE = 1.3f
+/**
+ * From this font scale on the Network card stacks: the viewer count gets its own line below the addresses, and the
+ * address field and its button sit on separate lines. Decided by the font scale setting, never by a value. Below it,
+ * two 15 character mono addresses plus the viewer slot fit the card down to a 340 dp wide screen; above it every
+ * address has the full card width (still fits at scale 2.0 on 360 dp), so an address is never cut.
+ */
+private const val STACKED_FONT_SCALE = 1.1f
+
+/** The keyboard animates in and shrinks the scrolling area; the focused field is scrolled into view once it rests. */
+private const val IME_SETTLE_MS = 120L
 
 /** Everything the Device tab can ask the app to do. */
 data class DeviceCallbacks(
@@ -176,6 +192,8 @@ fun DeviceScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(KmfTheme.colors.background)
+            // The address field is the only text input: the scrolling area must end at the keyboard, not under it.
+            .imePadding()
             .verticalScroll(rememberScrollState())
             .padding(contentPadding)
             .padding(horizontal = KmfDimens.ScreenPadding, vertical = KmfDimens.ScreenPadding),
@@ -519,6 +537,7 @@ private fun NetworkCard(network: DeviceNetworkCard, callbacks: DeviceCallbacks) 
     LaunchedEffect(network.remoteAddress) {
         if (network.remoteAddress.isNotEmpty()) addressText = network.remoteAddress
     }
+    val stacked = LocalDensity.current.fontScale >= STACKED_FONT_SCALE
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val submit = {
@@ -564,24 +583,26 @@ private fun NetworkCard(network: DeviceNetworkCard, callbacks: DeviceCallbacks) 
                     colors = deviceSwitchColors(),
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Column(modifier = Modifier.weight(1f)) {
-                    network.shareAddresses.forEach { address ->
-                        Text(
-                            text = address,
-                            style = KmfTheme.numbers.body,
-                            color = if (network.shareOn) colors.textPrimary else colors.textTertiary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
+            if (stacked) {
+                Column {
+                    ShareAddressLines(network)
+                    Text(
+                        text = network.viewers,
+                        style = KmfTheme.numbers.body,
+                        color = colors.textSecondary,
+                        maxLines = 1,
+                    )
                 }
-                SlotText(
-                    text = network.viewers,
-                    widest = WIDEST_VIEWERS,
-                    style = KmfTheme.numbers.body,
-                    color = colors.textSecondary,
-                )
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    ShareAddressLines(network, Modifier.weight(1f))
+                    SlotText(
+                        text = network.viewers,
+                        widest = WIDEST_VIEWERS,
+                        style = KmfTheme.numbers.body,
+                        color = colors.textSecondary,
+                    )
+                }
             }
         }
         HorizontalDivider(thickness = KmfDimens.Hairline, color = colors.hairline)
@@ -590,7 +611,7 @@ private fun NetworkCard(network: DeviceNetworkCard, callbacks: DeviceCallbacks) 
                 text = "Connect through another phone",
                 style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
             )
-            if (LocalDensity.current.fontScale > STACKED_FONT_SCALE) {
+            if (stacked) {
                 RemoteAddressField(network, addressText, { addressText = it }, submit, Modifier.fillMaxWidth())
                 RemoteActionButton(network, submit, Modifier.fillMaxWidth())
             } else {
@@ -608,6 +629,23 @@ private fun NetworkCard(network: DeviceNetworkCard, callbacks: DeviceCallbacks) 
     }
 }
 
+/** The two address slots, one line each; the user types them on the other phone, so they are never cut short. */
+@Composable
+private fun ShareAddressLines(network: DeviceNetworkCard, modifier: Modifier = Modifier) {
+    val colors = KmfTheme.colors
+    Column(modifier = modifier) {
+        network.shareAddresses.forEach { address ->
+            Text(
+                text = address,
+                style = KmfTheme.numbers.body,
+                color = if (network.shareOn) colors.textPrimary else colors.textTertiary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
 @Composable
 private fun RemoteAddressField(
     network: DeviceNetworkCard,
@@ -617,10 +655,26 @@ private fun RemoteAddressField(
     modifier: Modifier,
 ) {
     val colors = KmfTheme.colors
+    val bringIntoView = remember { BringIntoViewRequester() }
+    var focused by remember { mutableStateOf(false) }
+    val ime = WindowInsets.ime
+    val density = LocalDensity.current
+    LaunchedEffect(focused) {
+        if (!focused) return@LaunchedEffect
+        // Every keyboard animation step restarts the wait, so the scroll happens once the keyboard has settled.
+        snapshotFlow { ime.getBottom(density) }.collectLatest { keyboardHeight ->
+            if (keyboardHeight > 0) {
+                delay(IME_SETTLE_MS)
+                bringIntoView.bringIntoView()
+            }
+        }
+    }
     OutlinedTextField(
         value = text,
         onValueChange = onTextChange,
-        modifier = modifier,
+        modifier = modifier
+            .bringIntoViewRequester(bringIntoView)
+            .onFocusChanged { focused = it.isFocused },
         readOnly = network.remoteConnected,
         singleLine = true,
         isError = network.remoteError != null,
@@ -1077,19 +1131,40 @@ private fun DeviceRemotePhoneOfflinePreview() = DevicePreview(
     state = remotePreviewState(remoteLink(CollectionPhase.ERROR, offline = true)),
 )
 
+private fun sharingWorstCaseState(): BleUiState = previewState(DeviceMode.Collecting).copy(
+    shareOnNetwork = true,
+    sharingStatus = SharingStatus(
+        running = true,
+        port = 8765,
+        addresses = listOf("100.100.100.100", "100.100.100.100"),
+        viewers = 12,
+    ),
+)
+
+private fun withWorstCaseHost(model: DeviceScreenState): DeviceScreenState =
+    model.copy(network = model.network.copy(remoteAddress = PREVIEW_WORST_CASE_HOST))
+
 /** Two `100.100.100.100` addresses, `12 viewers` and a 40 character host typed into the field. */
 @Preview(name = "Device - Sharing, worst case", backgroundColor = 0xFF0D0F12, showBackground = true, widthDp = 390, heightDp = 1520)
 @Composable
 private fun DeviceSharingWorstCasePreview() = DevicePreview(
     DeviceMode.Collecting,
-    state = previewState(DeviceMode.Collecting).copy(
-        shareOnNetwork = true,
-        sharingStatus = SharingStatus(
-            running = true,
-            port = 8765,
-            addresses = listOf("100.100.100.100", "100.100.100.100"),
-            viewers = 12,
-        ),
-    ),
-    adjust = { it.copy(network = it.network.copy(remoteAddress = PREVIEW_WORST_CASE_HOST)) },
+    state = sharingWorstCaseState(),
+    adjust = ::withWorstCaseHost,
+)
+
+/** The same worst case at the largest font scale: addresses keep the full card width, the viewer count its own line. */
+@Preview(
+    name = "Device - Sharing, worst case, font 2.0",
+    backgroundColor = 0xFF0D0F12,
+    showBackground = true,
+    widthDp = 390,
+    heightDp = 3000,
+    fontScale = 2.0f,
+)
+@Composable
+private fun DeviceSharingWorstCaseLargeFontPreview() = DevicePreview(
+    DeviceMode.Collecting,
+    state = sharingWorstCaseState(),
+    adjust = ::withWorstCaseHost,
 )
