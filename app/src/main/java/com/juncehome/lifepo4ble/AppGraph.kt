@@ -85,7 +85,7 @@ class AppGraph(
     private val scanner by lazy {
         AndroidBleScanner(
             context = application,
-            hasScanPermission = ::hasRequiredBlePermissions,
+            hasScanPermission = ::hasBluetoothPermissions,
         )
     }
 
@@ -140,8 +140,9 @@ class AppGraph(
         )
     }
 
-    private fun hasRequiredBlePermissions(): Boolean =
-        BlePermissionPolicy.requiredRuntimePermissions(Build.VERSION.SDK_INT).all { permission ->
+    // Scanning needs only the Bluetooth permissions; first run asks for notifications after the scan step.
+    private fun hasBluetoothPermissions(): Boolean =
+        BlePermissionPolicy.bluetoothPermissions(Build.VERSION.SDK_INT).all { permission ->
             application.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
         }
 }
