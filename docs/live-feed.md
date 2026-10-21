@@ -18,8 +18,11 @@ any other program on the same network can read it. Example values below are illu
 | `GET /v1/now` | `200`, `Content-Type: application/json`: one snapshot |
 | any other path | `404` |
 | any method but `GET` | `405` with `Allow: GET` |
-| `GET /v1/live` while 4 live streams are open | `503` (`/v1/now` is always served) |
 | unparseable request line / head over 8 KiB | `400` / `431` |
+
+At most 4 live streams are open at once. When a fifth client connects, the oldest open stream is closed to make room
+(there is no `503`), so a viewer that vanished without closing its connection never locks others out. `/v1/now` is
+never limited.
 
 Try it:
 
@@ -62,8 +65,9 @@ data: {"ms":1792591400000,"phase":"ERROR","error":"GATT 8","nextReconnectInMs":5
 reconnect time changes.
 
 A `: ping` comment is sent every 15 s so both ends notice a dead connection and idle timers (NAT, VPN) do not close
-it. Readers must ignore comment lines. The server closes the stream when the client is too slow to keep up; reconnect
-to get a fresh `hello`, `link` and replay.
+it. Readers must ignore comment lines. The server closes a stream when the client is too slow to keep up, when a write
+to it stays blocked for 30 s (the client stopped reading), or when a newer client takes its place at the cap;
+reconnect to get a fresh `hello`, `link` and replay.
 
 ### Fields
 

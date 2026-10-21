@@ -9,13 +9,13 @@ import com.juncehome.lifepo4ble.protocol.KmfReading
 import java.io.Closeable
 import java.net.BindException
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -52,6 +52,7 @@ class LiveFeedHttpServerTest {
         maxClients: Int = 4,
         pingIntervalMs: Long = 15_000L,
         requestTimeoutMs: Long = 10_000L,
+        writeStallTimeoutMs: Long = 30_000L,
     ): LiveFeedHttpServer {
         val server = LiveFeedHttpServer(
             hub = hub,
@@ -60,6 +61,7 @@ class LiveFeedHttpServerTest {
             pingIntervalMs = pingIntervalMs,
             bindAddress = loopback,
             requestTimeoutMs = requestTimeoutMs,
+            writeStallTimeoutMs = writeStallTimeoutMs,
         )
         servers += server
         server.start(scope)
@@ -221,18 +223,46 @@ class LiveFeedHttpServerTest {
     }
 
     @Test
-    fun clientsBeyondCapGet503() = timed {
+    fun clientBeyondCapEvictsOldestStream() = timed {
         val server = startServer(maxClients = 1)
         val first = Client(server.boundPort, get("/v1/live"))
         assertEquals(200, first.status)
         first.nextMessage()
+        assertEquals(1, hub.clientCount.value)
 
-        assertEquals(503, Client(server.boundPort, get("/v1/live")).status)
+        val second = Client(server.boundPort, get("/v1/live"))
+
+        assertEquals(200, second.status)
+        assertTrue(second.nextMessage() is LiveFeedMessage.Hello)
+        first.awaitEof()
+        assertEquals(1, hub.clientCount.value)
         assertEquals(200, Client(server.boundPort, get("/v1/now")).status)
     }
 
     @Test
-    fun clientDisconnectReleasesSubscriptionAndSlot() = timed {
+    fun evictionTakesTheOldestOfSeveralStreams() = timed {
+        val server = startServer(maxClients = 2)
+        val oldest = Client(server.boundPort, get("/v1/live"))
+        oldest.nextMessage()
+        val middle = Client(server.boundPort, get("/v1/live"))
+        middle.nextMessage()
+        assertEquals(2, hub.clientCount.value)
+
+        val newest = Client(server.boundPort, get("/v1/live"))
+        newest.nextMessage()
+
+        oldest.awaitEof()
+        assertEquals(2, hub.clientCount.value)
+        hub.onBleEvent(notify(FULL_A + "\r\n"))
+        listOf(middle, newest).forEach { client ->
+            var message = client.nextMessage()
+            while (message !is LiveFeedMessage.Frame) message = client.nextMessage()
+            assertEquals(FULL_A, message.line)
+        }
+    }
+
+    @Test
+    fun clientDisconnectReleasesSubscription() = timed {
         val server = startServer(maxClients = 1)
         val first = Client(server.boundPort, get("/v1/live"))
         first.nextMessage()
@@ -241,14 +271,37 @@ class LiveFeedHttpServerTest {
         first.socket.close()
         hub.clientCount.first { it == 0 }
 
-        var status = 503
-        repeat(50) {
-            if (status == 503) {
-                status = Client(server.boundPort, get("/v1/live")).status
-                if (status == 503) delay(20)
-            }
+        val second = Client(server.boundPort, get("/v1/live"))
+        assertEquals(200, second.status)
+        assertTrue(second.nextMessage() is LiveFeedMessage.Hello)
+        assertEquals(1, hub.clientCount.value)
+    }
+
+    @Test
+    fun nonReadingClientIsClosedByWriteStallWatchdog() = timed {
+        // Roomy hub buffer: the hub must not be the one that drops this client, only the watchdog may.
+        val roomy = LiveFeedHub(clock = { 1_000L }, clientBufferCapacity = 1_000)
+        val server = startServer(hub = roomy, writeStallTimeoutMs = 300L)
+        val silent = Socket().also {
+            it.receiveBufferSize = 1_024
+            it.soTimeout = 5_000
+            clients += it
+            it.connect(InetSocketAddress(loopback, server.boundPort))
         }
-        assertEquals(200, status)
+        silent.getOutputStream().write(get("/v1/live").toByteArray(Charsets.ISO_8859_1))
+        silent.getOutputStream().flush()
+        roomy.clientCount.first { it == 1 }
+
+        // About 1 MB of events, far more than the 16 KiB send buffer plus the tiny receive buffer can absorb, and
+        // the client never reads: the server's write blocks until the watchdog closes the socket.
+        repeat(64) { index ->
+            val error = "$index".padEnd(16_000, 'e')
+            roomy.onCollectionState(
+                CollectionState(CollectionPhase.ERROR, CollectionVisibility.BACKGROUND, error = error),
+            )
+        }
+
+        roomy.clientCount.first { it == 0 }
     }
 
     @Test

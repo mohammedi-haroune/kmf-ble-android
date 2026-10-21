@@ -113,7 +113,10 @@ from the Mac.
 
 ### Errors
 
-Unknown path: `404`. Non-GET: `405`. More clients than the cap (builder picks, at least 4): `503`.
+Unknown path: `404`. Non-GET: `405`. At the client cap (4 live streams) a new `/v1/live` request is served and
+the oldest open stream is closed to make room (no `503`): the oldest is the one most likely to belong to a peer
+that vanished without closing the connection. A stream whose socket write stays blocked for 30 s (a peer that
+stopped reading) is closed too.
 Sharing on but the home phone has no meter session yet: `/v1/live` still opens, sends `hello` with the
 current phase and no replay lines.
 
@@ -239,8 +242,8 @@ JVM tests (JUnit4, `kotlinx-coroutines-test`), beside the matching packages:
 - `KmfLineParser` line exposure, including the no-terminator fast path.
 - **Replay equality**: for recorded line sequences (full A, short A after full A, B, C, ignored lines),
   the carried phone's merged reading after replay equals the home phone's merged reading.
-- Server against real loopback sockets: `hello`, replay, live lines, `link`, ping, 404/405/503,
-  slow-client drop without blocking the producer, session reset clears replay.
+- Server against real loopback sockets: `hello`, replay, live lines, `link`, ping, 404/405, oldest-stream eviction at
+  the cap, write-stall close, slow-client drop without blocking the producer, session reset clears replay.
 - Remote link: SSE lines to `BleEvent`s, phase mapping table above, backoff schedule, frame-time use.
 - `NowScreenReducer`: "phone offline" text, no zero/low SoC through connect, resume and reconnect.
 

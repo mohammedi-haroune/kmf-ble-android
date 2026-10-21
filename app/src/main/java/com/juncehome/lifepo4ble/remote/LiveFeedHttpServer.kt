@@ -12,8 +12,8 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -35,8 +35,12 @@ import org.json.JSONException
  * - `GET /v1/live`: Server-Sent Events from [LiveFeedHub.subscribe], plus an SSE `: ping` comment every
  *   [pingIntervalMs].
  * - `GET /v1/now`: one JSON snapshot.
- * - Anything else: `404`; a method other than GET: `405`; a `/v1/live` request while [maxClients] streams are
- *   open: `503` (`/v1/now` is always served). Query strings are ignored.
+ * - Anything else: `404`; a method other than GET: `405`. Query strings are ignored.
+ *
+ * At most [maxClients] live streams are open. A new `/v1/live` request over that cap does not fail: the oldest open
+ * stream is closed to make room, because it is the one most likely to belong to a peer that vanished without a FIN.
+ * A stream whose socket write stays blocked for [writeStallTimeoutMs] (a peer that stopped reading) is closed too,
+ * which frees its slot and its IO thread.
  *
  * Every connection is served by its own coroutine on [dispatcher]. A failure on one connection (write error, client
  * hang-up, bad request) only ends that connection. Call [stop] to release the port; cancelling the scope given to
@@ -52,15 +56,21 @@ class LiveFeedHttpServer(
     private val bindAddress: InetAddress? = null,
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val requestTimeoutMs: Long = 10_000L,
+    private val writeStallTimeoutMs: Long = 30_000L,
 ) {
     private val lock = Any()
     private var serverSocket: ServerSocket? = null
     private var serverJob: Job? = null
     private val connections = ConcurrentHashMap.newKeySet<Connection>()
-    private val openStreams = AtomicInteger(0)
+    private val streamsLock = Any()
 
-    @Volatile
-    private var stopping = false
+    /** Open live streams, oldest first. Guarded by [streamsLock]; its size is the number of occupied slots. */
+    private val streams = ArrayDeque<LiveStream>()
+
+    init {
+        require(maxClients >= 1) { "maxClients must be at least 1" }
+        require(writeStallTimeoutMs > 0L) { "writeStallTimeoutMs must be positive" }
+    }
 
     /** The port the server listens on, valid after [start] (so tests can pass port 0); -1 before the first start. */
     @Volatile
@@ -80,7 +90,6 @@ class LiveFeedHttpServer(
                 AppLog.e("live feed server bind failed port=$port address=${bindAddress ?: "all"}", e, TAG)
                 throw e
             }
-            stopping = false
             boundPort = socket.localPort
             val job = SupervisorJob(scope.coroutineContext[Job])
             val serverScope = CoroutineScope(scope.coroutineContext + job + dispatcher)
@@ -89,7 +98,7 @@ class LiveFeedHttpServer(
             serverScope.launch { acceptLoop(socket, serverScope) }
             AppLog.d(
                 "live feed server listening port=$boundPort address=${bindAddress ?: "all"} " +
-                    "maxClients=$maxClients pingMs=$pingIntervalMs",
+                    "maxClients=$maxClients pingMs=$pingIntervalMs writeStallMs=$writeStallTimeoutMs",
                 TAG,
             )
         }
@@ -105,7 +114,10 @@ class LiveFeedHttpServer(
             serverSocket = null
             serverJob = null
         }
-        stopping = true
+        synchronized(streamsLock) {
+            streams.forEach { it.end("server stopped") }
+            streams.clear()
+        }
         socket.closeQuietly()
         job?.cancel()
         val open = connections.toList()
@@ -138,6 +150,9 @@ class LiveFeedHttpServer(
         val remote = "${socket.inetAddress?.hostAddress}:${socket.port}"
         try {
             socket.tcpNoDelay = true
+            // The feed is a few KB/s. A small send buffer makes a peer that stopped reading block a write soon
+            // (so the write-stall watchdog sees it) instead of after megabytes of buffered events.
+            socket.sendBufferSize = SEND_BUFFER_BYTES
             val exchange = Exchange(connection, BufferedInputStream(socket.getInputStream()), remote)
             when (val head = readHead(exchange)) {
                 RequestHead.Silent -> AppLog.d("live feed http remote=$remote closed before a full request", TAG)
@@ -186,38 +201,54 @@ class LiveFeedHttpServer(
     }
 
     private suspend fun serveLive(exchange: Exchange) {
-        val streams = openStreams.incrementAndGet()
+        val live = admit(exchange)
         try {
-            if (streams > maxClients) {
-                AppLog.w(
-                    "live feed client refused remote=${exchange.remote} streams=${streams - 1} max=$maxClients",
-                    TAG,
-                )
-                exchange.respondText(503, "Service Unavailable")
-                return
-            }
-            stream(exchange)
+            stream(exchange, live)
         } finally {
-            openStreams.decrementAndGet()
+            release(live)
         }
     }
 
-    /** Sends the SSE head, then the subscription's messages and pings until the client or the hub ends the stream. */
-    private suspend fun stream(exchange: Exchange) {
-        val socket = exchange.connection.socket
+    /**
+     * Takes a slot for a new stream, closing the oldest open streams while [maxClients] are open. Eviction, the
+     * hub unsubscribe and the new subscription all happen under [streamsLock], so neither the slot count nor the
+     * hub's client count ever exceeds [maxClients].
+     */
+    private fun admit(exchange: Exchange): LiveStream = synchronized(streamsLock) {
+        while (streams.size >= maxClients) {
+            val oldest = streams.removeFirst()
+            oldest.end("evicted by a newer client")
+            AppLog.w(
+                "live feed evicted oldest live stream remote=${oldest.remote} ageMs=${oldest.ageMs()} " +
+                    "max=$maxClients newRemote=${exchange.remote}",
+                TAG,
+            )
+            oldest.connection.close()
+        }
         val subscription = hub.subscribe()
         exchange.connection.subscription = subscription
-        val clientHungUp = AtomicBoolean(false)
+        LiveStream(exchange, subscription).also { streams.addLast(it) }
+    }
+
+    private fun release(live: LiveStream) {
+        synchronized(streamsLock) { streams.remove(live) }
+    }
+
+    private fun openStreamCount(): Int = synchronized(streamsLock) { streams.size }
+
+    /** Sends the SSE head, then the subscription's messages and pings until the client or the hub ends the stream. */
+    private suspend fun stream(exchange: Exchange, live: LiveStream) {
+        val socket = exchange.connection.socket
         var reason = "server stopped" // what is left when the scope is cancelled
-        AppLog.d("live feed client open remote=${exchange.remote} streams=${openStreams.get()} max=$maxClients", TAG)
+        AppLog.d("live feed client open remote=${exchange.remote} streams=${openStreamCount()} max=$maxClients", TAG)
         try {
             coroutineScope {
                 socket.soTimeout = 0
                 // A hang-up wakes the pump at once instead of at the next write.
                 launch {
                     awaitHangUp(exchange.input)
-                    clientHungUp.set(true)
-                    subscription.close()
+                    live.end("client closed")
+                    live.subscription.close()
                 }
                 val pings = Channel<Unit>(Channel.CONFLATED)
                 val ticker = launch {
@@ -226,48 +257,62 @@ class LiveFeedHttpServer(
                         pings.trySend(Unit)
                     }
                 }
+                val watchdog = launch { watchWrites(live) }
                 try {
-                    exchange.writeStreamHead()
-                    reason = pump(subscription, pings, exchange.out, clientHungUp)
+                    live.write(STREAM_HEAD)
+                    AppLog.d("live feed http remote=${exchange.remote} ${exchange.request} -> 200 (event stream)", TAG)
+                    reason = pump(live, pings)
                 } catch (e: IOException) {
-                    reason = "write failed: ${e.message}"
+                    reason = live.endReason ?: "write failed: ${e.message}"
                 } finally {
                     ticker.cancel()
+                    watchdog.cancel()
                     socket.closeQuietly() // unblocks the hang-up watcher
                 }
             }
         } finally {
-            subscription.close()
-            AppLog.d(
-                "live feed client closed remote=${exchange.remote} reason=$reason streams=${openStreams.get() - 1}",
-                TAG,
-            )
+            live.subscription.close()
+            AppLog.d("live feed client closed remote=${exchange.remote} reason=$reason", TAG)
         }
     }
 
     /** Returns why the stream ended. An IOException from a write propagates to the caller. */
-    private suspend fun pump(
-        subscription: LiveFeedSubscription,
-        pings: ReceiveChannel<Unit>,
-        out: OutputStream,
-        clientHungUp: AtomicBoolean,
-    ): String {
+    private suspend fun pump(live: LiveStream, pings: ReceiveChannel<Unit>): String {
         while (true) {
             val next = select<ChannelResult<LiveFeedMessage>?> {
-                subscription.messages.onReceiveCatching { it }
+                live.subscription.messages.onReceiveCatching { it }
                 pings.onReceive { null }
             }
             if (next == null) {
-                out.writeUtf8(SseFormat.comment("ping"))
+                live.write(SseFormat.comment("ping"))
                 continue
             }
-            val message = next.getOrNull()
-                ?: return when {
-                    clientHungUp.get() -> "client closed"
-                    stopping -> "server stopped"
-                    else -> "dropped by hub (slow client)"
-                }
-            out.writeUtf8(encodeLiveFeedEvent(message) ?: continue)
+            val message = next.getOrNull() ?: return live.endReason ?: "dropped by hub (slow client)"
+            live.write(encodeLiveFeedEvent(message) ?: continue)
+        }
+    }
+
+    /**
+     * Closes [live] when one socket write has been blocked for [writeStallTimeoutMs], i.e. the peer stopped reading
+     * and the kernel buffers are full. Closing the socket makes the blocked write throw, which ends the stream; the
+     * slot is freed here so a new client is not turned away while the write unwinds.
+     */
+    private suspend fun watchWrites(live: LiveStream) {
+        val periodMs = (writeStallTimeoutMs / 4).coerceIn(10L, 1_000L)
+        while (true) {
+            delay(periodMs)
+            val stalledMs = live.writeStalledMs()
+            if (stalledMs >= writeStallTimeoutMs) {
+                live.end("write stalled")
+                release(live)
+                AppLog.w(
+                    "live feed write stalled remote=${live.remote} stalledMs=$stalledMs " +
+                        "limitMs=$writeStallTimeoutMs closing stream",
+                    TAG,
+                )
+                live.connection.close()
+                return
+            }
         }
     }
 
@@ -334,16 +379,6 @@ class LiveFeedHttpServer(
         val out: OutputStream = connection.socket.getOutputStream()
         var request = "-"
 
-        fun writeStreamHead() {
-            out.writeUtf8(
-                "HTTP/1.1 200 OK\r\n" +
-                    "Content-Type: text/event-stream\r\n" +
-                    "Cache-Control: no-cache\r\n" +
-                    "Connection: close\r\n\r\n",
-            )
-            AppLog.d("live feed http remote=$remote $request -> 200 (event stream)", TAG)
-        }
-
         fun respondText(status: Int, reason: String, extraHeaders: String = "") {
             val body = "$status $reason\n".toByteArray(Charsets.UTF_8)
             respond(status, reason, "text/plain; charset=utf-8", body, extraHeaders)
@@ -387,6 +422,43 @@ class LiveFeedHttpServer(
         }
     }
 
+    /** One open `/v1/live` stream: its hub subscription, why it ended, and when its current write started. */
+    private class LiveStream(val exchange: Exchange, val subscription: LiveFeedSubscription) {
+        val connection: Connection get() = exchange.connection
+        val remote: String get() = exchange.remote
+        private val openedNs = System.nanoTime()
+        private val reason = AtomicReference<String?>(null)
+        private val writeStartedNs = AtomicLong(0L)
+
+        /** Why the stream was ended from outside the pump (eviction, stall, hang-up, stop), or null. */
+        val endReason: String? get() = reason.get()
+
+        /** Records the first reason only, so the log names the real cause rather than its side effects. */
+        fun end(why: String) {
+            reason.compareAndSet(null, why)
+        }
+
+        fun ageMs(): Long = (System.nanoTime() - openedNs) / NANOS_PER_MS
+
+        /** Writes and flushes [text]; [writeStalledMs] reports how long this call has been blocked. */
+        fun write(text: String) {
+            val now = System.nanoTime()
+            writeStartedNs.set(if (now == 0L) 1L else now)
+            try {
+                exchange.out.write(text.toByteArray(Charsets.UTF_8))
+                exchange.out.flush()
+            } finally {
+                writeStartedNs.set(0L)
+            }
+        }
+
+        /** How long the current [write] has been blocked, 0 when none is in progress. */
+        fun writeStalledMs(): Long {
+            val started = writeStartedNs.get()
+            return if (started == 0L) 0L else (System.nanoTime() - started) / NANOS_PER_MS
+        }
+    }
+
     private sealed interface RequestHead {
         class Request(val method: String, val path: String) : RequestHead
 
@@ -408,6 +480,11 @@ class LiveFeedHttpServer(
         private const val LINGER_MS = 1_000L
         private const val MAX_DRAIN_BYTES = 64 * 1024
         private const val NANOS_PER_MS = 1_000_000L
+        private const val SEND_BUFFER_BYTES = 16 * 1024
+        private const val STREAM_HEAD = "HTTP/1.1 200 OK\r\n" +
+            "Content-Type: text/event-stream\r\n" +
+            "Cache-Control: no-cache\r\n" +
+            "Connection: close\r\n\r\n"
         private const val CR = '\r'.code.toByte()
         private const val LF = '\n'.code.toByte()
     }
@@ -424,11 +501,6 @@ internal fun encodeLiveFeedEvent(message: LiveFeedMessage): String? = try {
 } catch (e: JSONException) {
     AppLog.w("live feed skipped ${LiveFeedJson.eventName(message)} message: ${e.message}", TAG)
     null
-}
-
-private fun OutputStream.writeUtf8(text: String) {
-    write(text.toByteArray(Charsets.UTF_8))
-    flush()
 }
 
 private fun Closeable.closeQuietly() {
