@@ -1018,13 +1018,24 @@ class BleViewModel(
             AppLog.d("Remote: event ignored outside remote mode event=${timed.event.javaClass.simpleName}", TAG)
             return
         }
-        val nextState = BleStateReducer.reduce(mutableUiState.value, timed.event, remoteParser, timed.atMs)
+        // No saved sample seeds the carried phone, so values stay hidden until a full A frame gives the capacity.
+        val nextState = BleStateReducer.reduce(
+            mutableUiState.value,
+            timed.event,
+            remoteParser,
+            timed.atMs,
+            holdFirstValuesUntilCapacityKnown = true,
+        )
         mutableUiState.value = nextState
         if (timed.event is BleEvent.NotificationReceived) {
             val frames = remoteParser.lastOfferFrames
             if (frames.any { it is KmfFrame.C }) remoteSawC = true
             if (frames.any { it is KmfFrame.A }) {
-                addRemoteChartPoint(address, nextState, timed.atMs)
+                if (nextState.lastReadingTimestampMs == null) {
+                    AppLog.d("Remote: chart point skipped; no remote values yet (capacity unknown)", TAG)
+                } else {
+                    addRemoteChartPoint(address, nextState, timed.atMs)
+                }
             }
         }
     }

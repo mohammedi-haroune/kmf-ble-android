@@ -1770,6 +1770,123 @@ class BleViewModelTest {
     }
 
     @Test
+    fun remoteColdStartWithShortAFirstShowsNoValuesUntilAFullAArrives() = runTest {
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, FakeDeviceStore(initialRemoteAddress = "h:8765"), link)
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            link.events.emit(TimedBleEvent(BleEvent.Connecting(remoteMeter()), 500L))
+            link.events.emit(TimedBleEvent(BleEvent.Connected(remoteMeter()), 600L))
+            // The home phone is still resyncing: its first lines carry no capacity.
+            link.events.emit(remoteLine(SHORT_A, atMs = 1_000L))
+            advanceUntilIdle()
+
+            val held = viewModel.uiState.value
+            assertNull(held.lastReadingTimestampMs)
+            assertTrue(held.hasAFrame)
+            assertEquals(listOf(1_000L), held.inboundFrameTimesMs)
+            assertEquals(emptyList<String>(), viewModel.recentBatterySamples.value.map { it.deviceAddress })
+
+            link.events.emit(remoteLine(FULL_A, atMs = 2_000L))
+            advanceUntilIdle()
+
+            val shown = viewModel.uiState.value
+            assertEquals(2_000L, shown.lastReadingTimestampMs)
+            assertEquals(180.0, shown.latestReading.capacityAh, 0.001)
+            assertEquals(84.63, shown.latestReading.socPercent, 0.01)
+            assertEquals(1, viewModel.recentBatterySamples.value.size)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun remoteColdStartWithBThenCShowsNoValuesButTracksFrames() = runTest {
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, FakeDeviceStore(initialRemoteAddress = "h:8765"), link)
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            link.events.emit(TimedBleEvent(BleEvent.Connecting(remoteMeter()), 500L))
+            link.events.emit(remoteLine(B_LINE, atMs = 1_000L))
+            advanceUntilIdle()
+            val afterB = viewModel.uiState.value
+            assertNull(afterB.lastReadingTimestampMs)
+            assertTrue(afterB.hasBFrame)
+            assertFalse(afterB.hasAFrame)
+
+            link.events.emit(remoteLine(C_LINE, atMs = 1_100L))
+            advanceUntilIdle()
+            val afterC = viewModel.uiState.value
+            assertNull(afterC.lastReadingTimestampMs)
+            assertEquals(listOf(1_000L, 1_100L), afterC.inboundFrameTimesMs)
+
+            link.events.emit(remoteLine(FULL_A, atMs = 2_000L))
+            advanceUntilIdle()
+            val shown = viewModel.uiState.value
+            assertEquals(2_000L, shown.lastReadingTimestampMs)
+            assertEquals(84.63, shown.latestReading.socPercent, 0.01)
+            // The C frame seen while values were held is part of the merged reading.
+            assertEquals(1.82, shown.latestReading.chargeKwh, 0.001)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun remoteLineThatIsIgnoredByTheParserShowsNoValuesOnAColdStart() = runTest {
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, FakeDeviceStore(initialRemoteAddress = "h:8765"), link)
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            link.events.emit(TimedBleEvent(BleEvent.Connecting(remoteMeter()), 500L))
+            link.events.emit(remoteLine(":Z=1,2,3\r\n", atMs = 1_000L))
+            advanceUntilIdle()
+
+            assertNull(viewModel.uiState.value.lastReadingTimestampMs)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun remoteReconnectAfterValuesExistKeepsThemThroughCapacityLessFrames() = runTest {
+        val link = FakeRemoteMeterLink()
+        val viewModelScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val viewModel = remoteViewModel(viewModelScope, FakeDeviceStore(initialRemoteAddress = "h:8765"), link)
+
+        try {
+            viewModel.onAppVisibilityChanged(CollectionVisibility.FOREGROUND)
+            link.events.emit(TimedBleEvent(BleEvent.Connecting(remoteMeter()), 500L))
+            link.events.emit(remoteLine(FULL_A, atMs = 1_000L))
+            advanceUntilIdle()
+
+            // The stream drops and the home phone replays without a full A: B, C and a short A.
+            link.events.emit(TimedBleEvent(BleEvent.Disconnected("closed"), 5_000L))
+            link.events.emit(TimedBleEvent(BleEvent.Connecting(remoteMeter()), 6_000L))
+            link.events.emit(remoteLine(B_LINE, atMs = 6_100L))
+            advanceUntilIdle()
+            val afterB = viewModel.uiState.value
+            assertEquals(180.0, afterB.latestReading.capacityAh, 0.001)
+            assertEquals(6_100L, afterB.lastReadingTimestampMs)
+
+            link.events.emit(remoteLine(SHORT_A, atMs = 6_200L))
+            advanceUntilIdle()
+            val afterShortA = viewModel.uiState.value
+            assertEquals(180.0, afterShortA.latestReading.capacityAh, 0.001)
+            assertEquals(84.74, afterShortA.latestReading.socPercent, 0.01)
+            assertEquals(6_200L, afterShortA.lastReadingTimestampMs)
+        } finally {
+            viewModelScope.cancel()
+        }
+    }
+
+    @Test
     fun bluetoothActionsAreIgnoredInRemoteMode() = runTest {
         val snapshot = configuredSnapshot()
         val commander = FakeCollectionServiceCommander()

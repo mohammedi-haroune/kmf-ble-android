@@ -17,11 +17,19 @@ object BleStateReducer {
     const val FRAME_TIME_WINDOW_MS = 65_000L
     private const val MAX_FRAME_TIMES = 512
 
+    /**
+     * [holdFirstValuesUntilCapacityKnown] is for a reader that has no saved reading to seed from (the carried
+     * phone in remote mode): until the first value is shown, a reading without a known capacity leaves
+     * [BleUiState.lastReadingTimestampMs] unset so the screen shows `--` instead of a reading built from zeros.
+     * Frame flags, frame times and the merged reading are still tracked, so the first full A frame shows
+     * correct values. Once a value exists nothing changes.
+     */
     fun reduce(
         state: BleUiState,
         event: BleEvent,
         parser: KmfLineParser,
         nowMs: Long,
+        holdFirstValuesUntilCapacityKnown: Boolean = false,
     ): BleUiState {
         AppLog.d("reduce(event=${event.javaClass.simpleName}) state=${state.connectionState}", TAG)
         return when (event) {
@@ -76,11 +84,17 @@ object BleStateReducer {
                         "soc=${reading.socPercent} charge=${reading.chargeKwh} discharge=${reading.dischargeKwh}",
                     TAG,
                 )
+                val holdValues = holdFirstValuesUntilCapacityKnown &&
+                    state.lastReadingTimestampMs == null &&
+                    reading.capacityAh <= 0.0
+                if (holdValues) {
+                    AppLog.d("holding first values until capacity is known capacityAh=${reading.capacityAh}", TAG)
+                }
                 state.copy(
                     hasAFrame = state.hasAFrame || frames.any { it is KmfFrame.A },
                     hasBFrame = state.hasBFrame || frames.any { it is KmfFrame.B },
                     latestReading = reading,
-                    lastReadingTimestampMs = nowMs,
+                    lastReadingTimestampMs = if (holdValues) state.lastReadingTimestampMs else nowMs,
                     inboundFrameTimesMs = state.inboundFrameTimesMs.withFrameTimes(nowMs, frames.size),
                     packetLog = state.packetLog.plusBounded(
                         PacketFormatter.toEntry(nowMs, PacketDirection.INBOUND, event.bytes)

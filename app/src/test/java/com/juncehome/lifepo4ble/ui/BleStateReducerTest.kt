@@ -141,4 +141,68 @@ class BleStateReducerTest {
         assertEquals(KmfReading(), connecting.latestReading)
         assertNull(connecting.lastReadingTimestampMs)
     }
+
+    @Test
+    fun bluetoothSetsTheReadingTimeEvenWithoutAKnownCapacity() {
+        val parser = KmfLineParser()
+        val uuid = UUID.fromString("11111111-1111-1111-1111-111111111111")
+
+        val afterShortA = BleStateReducer.reduce(
+            BleUiState(),
+            BleEvent.NotificationReceived(uuid, ":A=1329,5200,0,1760,\r\n".encodeToByteArray()),
+            parser,
+            nowMs = 30L,
+        )
+
+        assertEquals(30L, afterShortA.lastReadingTimestampMs)
+    }
+
+    @Test
+    fun holdingFirstValuesWithholdsTheReadingTimeButStillTracksFrames() {
+        val parser = KmfLineParser()
+        val uuid = UUID.fromString("11111111-1111-1111-1111-111111111111")
+
+        val afterShortA = BleStateReducer.reduce(
+            BleUiState(),
+            BleEvent.NotificationReceived(uuid, ":A=1329,5200,0,1760,\r\n".encodeToByteArray()),
+            parser,
+            nowMs = 30L,
+            holdFirstValuesUntilCapacityKnown = true,
+        )
+        assertNull(afterShortA.lastReadingTimestampMs)
+        assertTrue(afterShortA.hasAFrame)
+        assertEquals(listOf(30L), afterShortA.inboundFrameTimesMs)
+        assertEquals(13.29, afterShortA.latestReading.voltageV, 0.001)
+
+        val afterFullA = BleStateReducer.reduce(
+            afterShortA,
+            BleEvent.NotificationReceived(uuid, ":A=1331,5200,1,2380,152340,1800,\r\n".encodeToByteArray()),
+            parser,
+            nowMs = 40L,
+            holdFirstValuesUntilCapacityKnown = true,
+        )
+        assertEquals(40L, afterFullA.lastReadingTimestampMs)
+        assertEquals(180.0, afterFullA.latestReading.capacityAh, 0.001)
+    }
+
+    @Test
+    fun holdingFirstValuesChangesNothingOnceValuesExist() {
+        val parser = KmfLineParser()
+        val uuid = UUID.fromString("11111111-1111-1111-1111-111111111111")
+        val before = BleUiState(
+            latestReading = KmfReading(voltageV = 13.5, remainingAh = 160.8, capacityAh = 180.0, socPercent = 89.3),
+            lastReadingTimestampMs = 10L,
+        )
+
+        val afterShortA = BleStateReducer.reduce(
+            before,
+            BleEvent.NotificationReceived(uuid, ":A=1352,90,0,5000\n".encodeToByteArray()),
+            parser,
+            nowMs = 21L,
+            holdFirstValuesUntilCapacityKnown = true,
+        )
+
+        assertEquals(21L, afterShortA.lastReadingTimestampMs)
+        assertEquals(180.0, afterShortA.latestReading.capacityAh, 0.001)
+    }
 }
