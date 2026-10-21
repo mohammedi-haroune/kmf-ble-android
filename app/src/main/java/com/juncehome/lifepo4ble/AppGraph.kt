@@ -29,9 +29,13 @@ import com.juncehome.lifepo4ble.data.KmfHistoryStore
 import com.juncehome.lifepo4ble.data.KmfTrendsRepository
 import com.juncehome.lifepo4ble.ui.trends.TrendsViewModel
 import com.juncehome.lifepo4ble.platform.BlePermissionPolicy
+import com.juncehome.lifepo4ble.remote.RemoteMeterLink
+import com.juncehome.lifepo4ble.remote.RemoteMeterLinkContract
 import com.juncehome.lifepo4ble.remote.SharingStatusRelay
 import com.juncehome.lifepo4ble.ui.BleViewModel
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharedFlow
 import java.io.File
@@ -50,6 +54,11 @@ class AppGraph(
 
     /** Process-wide view of the service-owned live feed server for the UI. */
     val sharingStatusRelay: SharingStatusRelay by lazy { SharingStatusRelay() }
+
+    /** The carried phone's client of a home phone's live feed; the app starts it only while it is visible. */
+    val remoteMeterLink: RemoteMeterLinkContract by lazy {
+        RemoteMeterLink(scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate))
+    }
 
     val collectionConfiguration: Flow<CollectionConfiguration?>
         get() = deviceStore.collectionConfiguration
