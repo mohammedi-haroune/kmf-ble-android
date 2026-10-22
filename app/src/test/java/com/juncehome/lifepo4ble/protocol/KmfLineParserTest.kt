@@ -1,6 +1,7 @@
 package com.juncehome.lifepo4ble.protocol
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -113,5 +114,97 @@ class KmfLineParserTest {
         val frames = parser.offer(("A=" + "1".repeat(250) + "\n").encodeToByteArray())
 
         assertTrue(frames.isEmpty())
+    }
+
+    @Test
+    fun offerExposesTerminatedLines() {
+        val parser = KmfLineParser()
+
+        parser.offer(":A=1331,5200,1,2380,152340,1800,\r\n:B=1,0,0,0,\r\n".encodeToByteArray())
+
+        assertEquals(
+            listOf(":A=1331,5200,1,2380,152340,1800,", ":B=1,0,0,0,"),
+            parser.lastOfferLines.map { it.text },
+        )
+        assertTrue(parser.lastOfferLines[0].frame is KmfFrame.A)
+        assertTrue(parser.lastOfferLines[1].frame is KmfFrame.B)
+    }
+
+    @Test
+    fun offerExposesSplitLineOnlyWhenComplete() {
+        val parser = KmfLineParser()
+
+        parser.offer(":A=1331,52".encodeToByteArray())
+        assertTrue(parser.lastOfferLines.isEmpty())
+
+        parser.offer("00,1,2380,152340,1800,\r\n".encodeToByteArray())
+        assertEquals(
+            listOf(":A=1331,5200,1,2380,152340,1800,"),
+            parser.lastOfferLines.map { it.text },
+        )
+        assertTrue(parser.lastOfferLines.single().frame is KmfFrame.A)
+    }
+
+    @Test
+    fun offerExposesUnterminatedFastPathLine() {
+        val parser = KmfLineParser()
+
+        parser.offer(":C=41200,38900,".encodeToByteArray())
+
+        val line = parser.lastOfferLines.single()
+        assertEquals(":C=41200,38900,", line.text)
+        assertTrue(line.frame is KmfFrame.C)
+    }
+
+    @Test
+    fun offerExposesIgnoredLinesWithNullFrame() {
+        val parser = KmfLineParser()
+
+        parser.offer(":X=1,2\r\n".encodeToByteArray())
+
+        assertEquals(listOf(KmfParsedLine(":X=1,2", null)), parser.lastOfferLines)
+        assertNull(parser.lastOfferLines.single().frame)
+    }
+
+    @Test
+    fun offerSkipsEmptyLines() {
+        val parser = KmfLineParser()
+
+        parser.offer("\r\n\r\n".encodeToByteArray())
+
+        assertTrue(parser.lastOfferLines.isEmpty())
+    }
+
+    @Test
+    fun offerExposesFlushedBufferedLineBeforeTheNewOne() {
+        val parser = KmfLineParser()
+
+        parser.offer(":A=1331,52".encodeToByteArray())
+        parser.offer(":B=1,0,0,0,".encodeToByteArray())
+
+        assertEquals(listOf(":A=1331,52", ":B=1,0,0,0,"), parser.lastOfferLines.map { it.text })
+        assertNull(parser.lastOfferLines[0].frame)
+        assertTrue(parser.lastOfferLines[1].frame is KmfFrame.B)
+    }
+
+    @Test
+    fun offerOmitsDiscardedOversizedLine() {
+        val parser = KmfLineParser(maxLineChars = 10)
+
+        parser.offer("0123456789012345\r\n:B=1,\r\n".encodeToByteArray())
+
+        assertEquals(listOf(":B=1,"), parser.lastOfferLines.map { it.text })
+    }
+
+    @Test
+    fun offerKeepsReturnValueAndLastOfferFramesInStepWithLines() {
+        val parser = KmfLineParser()
+
+        val frames = parser.offer(":A=1331,5200,1,2380,152340,1800,\r\n:X=1,2\r\n:B=1,0,0,0,\r\n".encodeToByteArray())
+
+        assertEquals(2, frames.size)
+        assertEquals(frames, parser.lastOfferFrames)
+        assertEquals(frames, parser.lastOfferLines.mapNotNull { it.frame })
+        assertEquals(3, parser.lastOfferLines.size)
     }
 }

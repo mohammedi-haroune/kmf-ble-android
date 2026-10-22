@@ -265,6 +265,9 @@ private fun KmfTabsShell(
                         onConnectOnce = viewModel::startTestConnection,
                         onClearLog = viewModel::clearLog,
                         onDisconnectTest = viewModel::stopTestConnection,
+                        onShareOnNetworkChange = viewModel::setShareOnNetwork,
+                        onConnectRemote = viewModel::connectRemote,
+                        onDisconnectRemote = viewModel::disconnectRemote,
                     ),
                 )
             }

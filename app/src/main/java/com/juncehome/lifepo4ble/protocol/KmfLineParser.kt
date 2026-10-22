@@ -10,6 +10,8 @@ class KmfLineParser(
     private var discardingOversizedLine = false
     var lastOfferFrames: List<KmfFrame> = emptyList()
         private set
+    var lastOfferLines: List<KmfParsedLine> = emptyList()
+        private set
 
     private companion object {
         const val TAG = "KMF-BLE"
@@ -24,27 +26,29 @@ class KmfLineParser(
     fun offer(bytes: ByteArray): List<KmfFrame> {
         val text = String(bytes, Charsets.US_ASCII)
         val frames = mutableListOf<KmfFrame>()
+        val lines = mutableListOf<KmfParsedLine>()
         AppLog.d("parser.offer bytes=${bytes.size} ascii=$text", TAG)
         val hasLineTerminator = text.any { it == '\r' || it == '\n' }
 
         if (!hasLineTerminator && buffer.isNotEmpty() && text.startsWithFrameMarker()) {
-            flushBufferedLine(frames)
+            flushBufferedLine(frames, lines)
         }
 
         if (!hasLineTerminator && buffer.isEmpty()) {
             parseLine(text)?.let { frame ->
                 AppLog.d("parser frame=${frame.describe()}", TAG)
                 frames.add(frame)
-                return finish(frames)
+                lines.add(KmfParsedLine(text, frame))
+                return finish(frames, lines)
             }
             if (text.startsWithKnownFrameMarker()) {
                 AppLog.d("parser buffering partial packet=$text", TAG)
                 buffer.append(text)
-                return finish(frames)
+                return finish(frames, lines)
             }
             if (text.startsWithFrameMarker()) {
                 AppLog.d("parser ignored standalone packet=$text", TAG)
-                return finish(frames)
+                return finish(frames, lines)
             }
         }
 
@@ -54,10 +58,14 @@ class KmfLineParser(
                     if (!discardingOversizedLine) {
                         val line = buffer.toString()
                         AppLog.d("parser line=$line", TAG)
-                        parseLine(line)?.let { frame ->
+                        val frame = parseLine(line)
+                        if (frame != null) {
                             AppLog.d("parser frame=${frame.describe()}", TAG)
                             frames.add(frame)
-                        } ?: AppLog.d("parser ignored line=$line", TAG)
+                        } else {
+                            AppLog.d("parser ignored line=$line", TAG)
+                        }
+                        if (line.isNotEmpty()) lines.add(KmfParsedLine(line, frame))
                     }
                     buffer.clear()
                     discardingOversizedLine = false
@@ -75,17 +83,21 @@ class KmfLineParser(
             }
         }
 
-        return finish(frames)
+        return finish(frames, lines)
     }
 
-    private fun flushBufferedLine(frames: MutableList<KmfFrame>) {
+    private fun flushBufferedLine(frames: MutableList<KmfFrame>, lines: MutableList<KmfParsedLine>) {
         val line = buffer.toString()
         if (line.isNotEmpty()) {
             AppLog.d("parser flushing buffered line=$line", TAG)
-            parseLine(line)?.let { frame ->
+            val frame = parseLine(line)
+            if (frame != null) {
                 AppLog.d("parser frame=${frame.describe()}", TAG)
                 frames.add(frame)
-            } ?: AppLog.d("parser ignored buffered line=$line", TAG)
+            } else {
+                AppLog.d("parser ignored buffered line=$line", TAG)
+            }
+            lines.add(KmfParsedLine(line, frame))
         }
         buffer.clear()
         discardingOversizedLine = false
@@ -197,8 +209,9 @@ class KmfLineParser(
             .minOrNull()
             ?: Int.MAX_VALUE
 
-    private fun finish(frames: List<KmfFrame>): List<KmfFrame> {
+    private fun finish(frames: List<KmfFrame>, lines: List<KmfParsedLine>): List<KmfFrame> {
         lastOfferFrames = frames.toList()
+        lastOfferLines = lines.toList()
         return lastOfferFrames
     }
 }

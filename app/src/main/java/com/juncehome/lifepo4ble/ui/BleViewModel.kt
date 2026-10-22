@@ -22,11 +22,18 @@ import com.juncehome.lifepo4ble.protocol.KmfFrame
 import com.juncehome.lifepo4ble.protocol.KmfLineParser
 import com.juncehome.lifepo4ble.protocol.KmfReading
 import com.juncehome.lifepo4ble.ble.BleEvent
+import com.juncehome.lifepo4ble.remote.RemoteAddress
+import com.juncehome.lifepo4ble.remote.RemoteMeterLinkContract
+import com.juncehome.lifepo4ble.remote.SharingStatus
+import com.juncehome.lifepo4ble.remote.TimedBleEvent
+import com.juncehome.lifepo4ble.ui.now.NowScreenReducer
 import com.juncehome.lifepo4ble.ui.firstrun.FirstRunNotice
 import com.juncehome.lifepo4ble.ui.firstrun.FirstRunStep
 import android.content.IntentSender
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,8 +53,12 @@ class BleViewModel(
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val scope: CoroutineScope? = null,
     private val collectionStatus: StateFlow<CollectionState?>? = null,
+    private val remoteLink: RemoteMeterLinkContract? = null,
+    private val sharingStatus: StateFlow<SharingStatus?>? = null,
 ) : ViewModel() {
     private val parser = KmfLineParser()
+    // Remote lines get their own parser so a half line left by the Bluetooth path can never prefix them.
+    private val remoteParser = KmfLineParser()
     private var recentSamplesJob: kotlinx.coroutines.Job? = null
     private var recentSamplesDeviceAddress: String? = null
     private var pendingAssociationSnapshot: DeviceSnapshot? = null
@@ -59,6 +70,11 @@ class BleViewModel(
     private var testBootstrapJob: kotlinx.coroutines.Job? = null
     private var testSeenA = false
     private var testSeenB = false
+
+    /** The home phone this phone reads the meter from; null while it uses Bluetooth. Main thread only. */
+    private var remoteAddress: RemoteAddress? = null
+    private var remoteSawC = false
+    private var savedSnapshot: DeviceSnapshot? = null
     private val workScope: CoroutineScope
         get() = scope ?: viewModelScope
 
@@ -78,6 +94,10 @@ class BleViewModel(
     init {
         workScope.launch {
             repository.events.collect { event ->
+                if (remoteAddress != null) {
+                    AppLog.d("Remote: Bluetooth event ignored in remote mode event=${event.javaClass.simpleName}", TAG)
+                    return@collect
+                }
                 val previousState = mutableUiState.value
                 val nowMs = clock()
                 val nextState = BleStateReducer.reduce(previousState, event, parser, nowMs)
@@ -96,8 +116,40 @@ class BleViewModel(
                 }
             }
         }
+        remoteLink?.let { link ->
+            // The link's events have no replay: subscribe before anything can start it.
+            workScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                link.events.collect { timed -> onRemoteEvent(timed) }
+            }
+            workScope.launch {
+                link.state.collect { linkState ->
+                    if (remoteAddress == null) return@collect
+                    if (linkState == null) {
+                        // Stopped (background, disconnect or a dead loop): keep the last remote values on screen.
+                        AppLog.d("Remote: link state null; keeping the last remote values", TAG)
+                        return@collect
+                    }
+                    val previous = mutableUiState.value.collectionState
+                    if (previous?.phase != linkState.phase || previous.reconnectAttempt != linkState.reconnectAttempt) {
+                        AppLog.d(
+                            "Remote: link phase=${linkState.phase} attempt=${linkState.reconnectAttempt} " +
+                                "unreachable=${linkState.remoteUnreachable} nextReconnectAtMs=${linkState.nextReconnectAtMs} " +
+                                "error=${linkState.error}",
+                            TAG,
+                        )
+                    }
+                    mutableUiState.update { it.copy(collectionState = linkState) }
+                }
+            }
+        }
+        // Collected together with the remote address so "configuration loaded" and the mode land in one
+        // state update: a remote-mode phone never flashes NoMeter / CollectionOff at launch.
         workScope.launch {
-            deviceStore.collectionConfiguration.collect { configuration ->
+            combine(deviceStore.collectionConfiguration, deviceStore.remoteAddress) { configuration, storedRemote ->
+                configuration to storedRemote
+            }.collect { (configuration, storedRemote) ->
+                val remote = resolveStoredRemoteAddress(storedRemote)
+                val modeSwitch = switchRemoteMode(remote)
                 if (configuration?.autonomousEnabled == true) {
                     collectionConfigurationState = CollectionConfigurationState.CONFIGURED
                     autonomousCollectionConfigured = true
@@ -107,7 +159,7 @@ class BleViewModel(
                             autonomousCollectionDetail = "Configured for ${configuration.snapshot.address}; the service collects when the meter is present.",
                             autonomousCollectionConfigured = true,
                             collectionConfigurationLoaded = true,
-                        )
+                        ).let(modeSwitch)
                     }
                     collectionServiceCommander?.setVisibility(currentAppVisibility)
                 } else {
@@ -127,14 +179,19 @@ class BleViewModel(
                                 it.autonomousCollectionDetail
                             },
                             autonomousCollectionConfigured = false,
-                        )
+                        ).let(modeSwitch)
                     }
                 }
+                afterRemoteModeSwitch(remote)
             }
         }
         collectionStatus?.let { status ->
             workScope.launch {
                 status.collect { collection ->
+                    if (remoteAddress != null) {
+                        // In remote mode the link owns the phase; the relay belongs to the Bluetooth service.
+                        return@collect
+                    }
                     val previous = mutableUiState.value.collectionState
                     if (previous?.phase != collection?.phase ||
                         previous?.reconnectAttempt != collection?.reconnectAttempt
@@ -151,6 +208,7 @@ class BleViewModel(
         }
         workScope.launch {
             deviceStore.snapshot.collect { snapshot ->
+                savedSnapshot = snapshot
                 val associated = lookUpCompanionAssociation(snapshot?.address)
                 val previous = mutableUiState.value
                 if (previous.savedMeterAddress != snapshot?.address || previous.companionAssociated != associated ||
@@ -161,10 +219,16 @@ class BleViewModel(
                         TAG,
                     )
                 }
+                val remoteActive = remoteAddress != null
                 mutableUiState.update { state ->
                     state.copy(
                         canConfigureAutonomousCollection = snapshot != null && state.permissionsGranted,
-                        selectedDevice = snapshot?.toScannedDevice() ?: state.selectedDevice,
+                        // In remote mode the shown meter is the remote one, whatever meter is saved.
+                        selectedDevice = if (remoteActive) {
+                            state.selectedDevice
+                        } else {
+                            snapshot?.toScannedDevice() ?: state.selectedDevice
+                        },
                         savedMeterAddress = snapshot?.address,
                         savedMeterName = snapshot?.name,
                         savedMeterLoaded = true,
@@ -178,6 +242,24 @@ class BleViewModel(
             deviceStore.firstRunCompleted.collect { completed ->
                 AppLog.d("FirstRun: persisted firstRunCompleted=$completed", TAG)
                 mutableUiState.update { it.copy(firstRunCompleted = completed, firstRunCompletedLoaded = true) }
+            }
+        }
+        workScope.launch {
+            deviceStore.shareOnNetwork.collect { enabled ->
+                AppLog.d("Sharing: persisted shareOnNetwork=$enabled", TAG)
+                mutableUiState.update { it.copy(shareOnNetwork = enabled) }
+            }
+        }
+        sharingStatus?.let { status ->
+            workScope.launch {
+                status.collect { sharing ->
+                    AppLog.d(
+                        "Sharing: status running=${sharing?.running} port=${sharing?.port} " +
+                            "viewers=${sharing?.viewers} addresses=${sharing?.addresses?.size} error=${sharing?.error}",
+                        TAG,
+                    )
+                    mutableUiState.update { it.copy(sharingStatus = sharing) }
+                }
             }
         }
     }
@@ -261,6 +343,10 @@ class BleViewModel(
     }
 
     fun requestAutonomousCollection() {
+        if (remoteAddress != null) {
+            AppLog.w("Companion setup ignored in remote mode; this phone does not use the meter over Bluetooth", TAG)
+            return
+        }
         // Notifications are requested separately (first-run step 4); companion setup only needs
         // the Bluetooth permissions.
         if (!mutableUiState.value.bluetoothPermissionsGranted) {
@@ -350,23 +436,38 @@ class BleViewModel(
 
     fun stopAutonomousCollection() {
         AppLog.d("Collection: explicit stop requested from the app", TAG)
-        workScope.launch {
-            autonomousCollectionDisabler?.disable() ?: deviceStore.disableAutonomousCollection()
-            collectionConfigurationState = CollectionConfigurationState.UNCONFIGURED
-            autonomousCollectionConfigured = false
-            mutableUiState.update {
-                it.copy(
-                    autonomousCollectionStatus = AutonomousCollectionStatus.NOT_CONFIGURED,
-                    autonomousCollectionDetail = null,
-                    autonomousCollectionConfigured = false,
-                )
-            }
-            collectionServiceCommander?.stop()
+        workScope.launch { disableAutonomousCollectionNow() }
+    }
+
+    private suspend fun disableAutonomousCollectionNow() {
+        autonomousCollectionDisabler?.disable() ?: deviceStore.disableAutonomousCollection()
+        collectionConfigurationState = CollectionConfigurationState.UNCONFIGURED
+        autonomousCollectionConfigured = false
+        mutableUiState.update {
+            it.copy(
+                autonomousCollectionStatus = AutonomousCollectionStatus.NOT_CONFIGURED,
+                autonomousCollectionDetail = null,
+                autonomousCollectionConfigured = false,
+            )
         }
+        collectionServiceCommander?.stop()
     }
 
     /** Now tab "Retry now" / "Retry": skip the service's reconnect backoff. */
     fun retryCollectionNow() {
+        val link = remoteLink
+        val address = remoteAddress
+        if (address != null && link != null) {
+            AppLog.d("Remote: retry requested phase=${mutableUiState.value.collectionState?.phase}", TAG)
+            if (link.state.value == null && currentAppVisibility == CollectionVisibility.FOREGROUND) {
+                // A visible app with no link state means the loop is not running (it died): Retry starts it again,
+                // otherwise reconnectNow() has nothing to wake.
+                AppLog.d("Remote: retry restarts the link because it is not running host=${address.display}", TAG)
+                startRemoteLink(address, link)
+            }
+            link.reconnectNow()
+            return
+        }
         val commander = collectionServiceCommander
         AppLog.d(
             "Now: retry requested phase=${mutableUiState.value.collectionState?.phase} " +
@@ -514,6 +615,10 @@ class BleViewModel(
     }
 
     private fun turnOnCollection(source: String) {
+        if (remoteAddress != null) {
+            AppLog.w("$source: turn on collection ignored in remote mode; Bluetooth collection is off", TAG)
+            return
+        }
         val state = mutableUiState.value
         val associated = lookUpCompanionAssociation(state.savedMeterAddress)
         AppLog.d(
@@ -549,6 +654,10 @@ class BleViewModel(
 
     /** Device tab "Pair with Android": runs the companion association for the saved meter. */
     fun pairWithAndroid() {
+        if (remoteAddress != null) {
+            AppLog.w("Device: pair with Android ignored in remote mode", TAG)
+            return
+        }
         AppLog.d("Device: pair with Android requested meterSaved=${mutableUiState.value.savedMeterAddress != null}", TAG)
         requestAutonomousCollection()
     }
@@ -560,6 +669,10 @@ class BleViewModel(
      */
     fun startTestConnection() {
         val state = mutableUiState.value
+        if (remoteAddress != null) {
+            AppLog.w("Device: test connection ignored in remote mode", TAG)
+            return
+        }
         if (!manualTransportAllowed()) {
             AppLog.w("Device: test connection ignored because background collection owns the link", TAG)
             return
@@ -675,6 +788,10 @@ class BleViewModel(
      * meter (which also clears the first-run completion flag). Saved battery history is kept.
      */
     private fun resetSavedMeter(reason: String) {
+        if (remoteAddress != null) {
+            AppLog.w("Device: $reason meter ignored in remote mode; the saved meter is not in use", TAG)
+            return
+        }
         val state = mutableUiState.value
         AppLog.d(
             "Device: $reason meter requested configured=$autonomousCollectionConfigured " +
@@ -755,13 +872,213 @@ class BleViewModel(
     }
 
     private fun manualTransportAllowed(): Boolean =
-        collectionConfigurationState == CollectionConfigurationState.UNCONFIGURED
+        collectionConfigurationState == CollectionConfigurationState.UNCONFIGURED && remoteAddress == null
 
     fun onAppVisibilityChanged(visibility: CollectionVisibility) {
         currentAppVisibility = visibility
         if (autonomousCollectionConfigured) {
             collectionServiceCommander?.setVisibility(visibility)
         }
+        val address = remoteAddress
+        val link = remoteLink
+        if (address != null && link != null) {
+            // The remote link only runs while the app is visible; the last values stay on screen.
+            if (visibility == CollectionVisibility.FOREGROUND) {
+                startRemoteLink(address, link)
+            } else {
+                AppLog.d("Remote: app in background; stopping the link host=${address.display}", TAG)
+                link.stop()
+            }
+        }
+    }
+
+    /** Device tab "Connect through another phone": shows the meter from a home phone's live feed. */
+    fun connectRemote(addressText: String) {
+        val address = RemoteAddress.parse(addressText)
+        if (address == null) {
+            AppLog.w("Remote: address rejected text='${addressText.trim().take(MAX_LOGGED_ADDRESS_CHARS)}'", TAG)
+            mutableUiState.update { it.copy(remoteAddressError = REMOTE_ADDRESS_ERROR) }
+            return
+        }
+        if (remoteLink == null) {
+            AppLog.w("Remote: connect ignored because no remote link is available", TAG)
+            return
+        }
+        AppLog.d(
+            "Remote: connect requested host=${address.display} configured=$autonomousCollectionConfigured " +
+                "testActive=${mutableUiState.value.testConnectionActive}",
+            TAG,
+        )
+        mutableUiState.update { it.copy(remoteAddressError = null) }
+        if (mutableUiState.value.testConnectionActive) {
+            stopTestConnection(reason = "remote connect")
+        }
+        workScope.launch {
+            try {
+                if (autonomousCollectionConfigured) {
+                    AppLog.d("Remote: stopping Bluetooth collection before switching to remote mode", TAG)
+                    disableAutonomousCollectionNow()
+                }
+                deviceStore.setRemoteAddress(address.display)
+            } catch (error: Throwable) {
+                AppLog.e("Remote: connect failed to save host=${address.display}", error, TAG)
+            }
+        }
+    }
+
+    /** Device tab "Disconnect" in remote mode: back to Bluetooth, collection stays off until switched on. */
+    fun disconnectRemote() {
+        AppLog.d("Remote: disconnect requested host=${remoteAddress?.display}", TAG)
+        remoteLink?.stop()
+        workScope.launch {
+            try {
+                deviceStore.setRemoteAddress(null)
+            } catch (error: Throwable) {
+                AppLog.e("Remote: disconnect failed to clear the saved address", error, TAG)
+            }
+        }
+    }
+
+    /** Device tab "Share on network" switch (home phone side); the service follows the stored value. */
+    fun setShareOnNetwork(enabled: Boolean) {
+        AppLog.d("Sharing: share on network set to $enabled", TAG)
+        workScope.launch {
+            try {
+                deviceStore.setShareOnNetwork(enabled)
+            } catch (error: Throwable) {
+                AppLog.e("Sharing: failed to persist shareOnNetwork=$enabled", error, TAG)
+            }
+        }
+    }
+
+    /** A stored address that does not parse is logged and treated as Bluetooth mode. */
+    private fun resolveStoredRemoteAddress(stored: String?): RemoteAddress? {
+        if (stored == null) return null
+        val parsed = RemoteAddress.parse(stored)
+        if (parsed == null) {
+            AppLog.w("Remote: stored address '${stored.take(MAX_LOGGED_ADDRESS_CHARS)}' does not parse; using Bluetooth mode", TAG)
+            return null
+        }
+        if (remoteLink == null) {
+            AppLog.w("Remote: stored address host=${parsed.display} ignored because no remote link is available", TAG)
+            return null
+        }
+        return parsed
+    }
+
+    /**
+     * Leaves the previous mode and enters the one for [remote] (null = Bluetooth), returning the state change
+     * that belongs to it so the caller applies it in the same update as the configuration. Nothing to do
+     * (identity) while the mode did not change.
+     */
+    private fun switchRemoteMode(remote: RemoteAddress?): (BleUiState) -> BleUiState {
+        if (remote == remoteAddress) return { it }
+        val previous = remoteAddress
+        remoteAddress = remote
+        remoteSawC = false
+        recentSamplesJob?.cancel()
+        recentSamplesJob = null
+        recentSamplesDeviceAddress = null
+        mutableRecentBatterySamples.value = emptyList()
+        if (remote == null) {
+            AppLog.d("Remote: leaving remote mode host=${previous?.display}; using Bluetooth mode", TAG)
+            remoteLink?.stop()
+            val saved = savedSnapshot?.toScannedDevice()
+            val relay = collectionStatus?.value
+            return { state ->
+                state.withEmptyMeterValues().copy(
+                    remoteAddress = null,
+                    selectedDevice = saved,
+                    collectionState = relay,
+                )
+            }
+        }
+        AppLog.d("Remote: entering remote mode host=${remote.display} previous=${previous?.display}", TAG)
+        val linkState = remoteLink?.state?.value
+        return { state ->
+            state.withEmptyMeterValues().copy(
+                remoteAddress = remote.display,
+                remoteAddressError = null,
+                selectedDevice = null,
+                collectionState = linkState,
+            )
+        }
+    }
+
+    /** Runs after the state update of a mode switch: starts the link or restores the saved meter's history. */
+    private fun afterRemoteModeSwitch(remote: RemoteAddress?) {
+        val link = remoteLink
+        if (remote == null) {
+            syncRecentBatterySamples(savedSnapshot?.address)
+        } else if (link != null && currentAppVisibility == CollectionVisibility.FOREGROUND) {
+            startRemoteLink(remote, link)
+        }
+    }
+
+    private fun startRemoteLink(address: RemoteAddress, link: RemoteMeterLinkContract) {
+        AppLog.d("Remote: starting link host=${address.display}", TAG)
+        link.start(address)
+    }
+
+    private fun onRemoteEvent(timed: TimedBleEvent) {
+        val address = remoteAddress ?: run {
+            AppLog.d("Remote: event ignored outside remote mode event=${timed.event.javaClass.simpleName}", TAG)
+            return
+        }
+        // No saved sample seeds the carried phone, so values stay hidden until a full A frame gives the capacity.
+        val nextState = BleStateReducer.reduce(
+            mutableUiState.value,
+            timed.event,
+            remoteParser,
+            timed.atMs,
+            holdFirstValuesUntilCapacityKnown = true,
+        )
+        mutableUiState.value = nextState
+        if (timed.event is BleEvent.NotificationReceived) {
+            val frames = remoteParser.lastOfferFrames
+            if (frames.any { it is KmfFrame.C }) remoteSawC = true
+            if (frames.any { it is KmfFrame.A }) {
+                if (nextState.lastReadingTimestampMs == null) {
+                    AppLog.d("Remote: chart point skipped; no remote values yet (capacity unknown)", TAG)
+                } else {
+                    addRemoteChartPoint(address, nextState, timed.atMs)
+                }
+            }
+        }
+    }
+
+    /** Newest first, like the history flow; points older than the Now chart window are dropped. */
+    private fun addRemoteChartPoint(address: RemoteAddress, state: BleUiState, atMs: Long) {
+        val reading = state.latestReading
+        val point = KmfBatterySampleEntity(
+            timestampMs = atMs,
+            deviceAddress = address.id,
+            deviceName = state.selectedDevice?.name,
+            voltageV = reading.voltageV,
+            currentA = reading.currentA,
+            powerW = reading.powerW,
+            charging = reading.charging,
+            minutesRemaining = reading.minutesRemaining,
+            remainingAh = reading.remainingAh,
+            capacityAh = reading.capacityAh,
+            socPercent = reading.socPercent,
+            chargeKwh = reading.chargeKwh,
+            dischargeKwh = reading.dischargeKwh,
+            hasAFrame = state.hasAFrame,
+            hasBFrame = state.hasBFrame,
+            hasCFrame = remoteSawC,
+            rawAFieldsCsv = null,
+            rawBFieldsCsv = null,
+            rawCFieldsCsv = null,
+            connectionState = state.connectionState.name,
+            serviceUuid = null,
+            notifyUuid = null,
+            writeUuid = null,
+        )
+        val cutoffMs = atMs - NowScreenReducer.CHART_WINDOW_MS
+        mutableRecentBatterySamples.value = (listOf(point) + mutableRecentBatterySamples.value)
+            .filter { it.timestampMs >= cutoffMs }
+            .take(LIVE_SAMPLE_LIMIT)
     }
 
     private fun updateAutonomousCollectionError(detail: String) {
@@ -774,6 +1091,10 @@ class BleViewModel(
     }
 
     private fun syncRecentBatterySamples(deviceAddress: String?) {
+        if (remoteAddress != null) {
+            // Remote mode charts in-memory points of the live feed, never the saved Bluetooth meter's history.
+            return
+        }
         if (recentSamplesDeviceAddress == deviceAddress) {
             return
         }
@@ -858,6 +1179,8 @@ class BleViewModel(
     private companion object {
         const val TAG = "KMF-BLE"
         const val LIVE_SAMPLE_LIMIT = 2_048
+        const val MAX_LOGGED_ADDRESS_CHARS = 100
+        const val REMOTE_ADDRESS_ERROR = "Enter a host name or IP, optionally with :port"
     }
 
     private enum class CollectionConfigurationState {
@@ -871,6 +1194,18 @@ object CompanionAssociationResultDiagnostics {
     fun describe(resultCode: Int, hasData: Boolean): String =
         "Android companion setup ended without confirmation (resultCode=$resultCode, resultData=$hasData); background collection is not enabled."
 }
+
+/** What a meter switch (Bluetooth <-> remote) clears: the other mode's readings, flags, frame times and log. */
+private fun BleUiState.withEmptyMeterValues(): BleUiState = copy(
+    connectionState = ConnectionState.DISCONNECTED,
+    hasAFrame = false,
+    hasBFrame = false,
+    latestReading = KmfReading(),
+    lastReadingTimestampMs = null,
+    inboundFrameTimesMs = emptyList(),
+    packetLog = emptyList(),
+    latestError = null,
+)
 
 private fun DeviceSnapshot.toScannedDevice(): ScannedDevice = ScannedDevice(
     name = name,

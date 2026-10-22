@@ -4,6 +4,7 @@ import com.juncehome.lifepo4ble.ble.ScannedDevice
 import com.juncehome.lifepo4ble.collection.CollectionState
 import com.juncehome.lifepo4ble.protocol.FrameLogEntry
 import com.juncehome.lifepo4ble.protocol.KmfReading
+import com.juncehome.lifepo4ble.remote.SharingStatus
 
 enum class AutonomousCollectionStatus {
     NOT_CONFIGURED,
@@ -65,7 +66,19 @@ data class BleUiState(
     val testConnectionActive: Boolean = false,
     /** Short outcome of the last test connection ("Disconnected", failure reason); null when none. */
     val testConnectionResult: String? = null,
+    /** Saved home phone feed address ("host:port"); non-null means this phone shows the meter through another phone. */
+    val remoteAddress: String? = null,
+    /** Why the address typed in Device could not be saved; null when it is fine. */
+    val remoteAddressError: String? = null,
+    /** This (home) phone shares its live meter feed on the network. */
+    val shareOnNetwork: Boolean = false,
+    /** Live feed server status published by the collection service; null while nothing runs. */
+    val sharingStatus: SharingStatus? = null,
 ) {
+    /** This phone reads the meter from another phone instead of over Bluetooth. */
+    val remoteMode: Boolean
+        get() = remoteAddress != null
+
     val permissionsGranted: Boolean
         get() = grantedPermissions.containsAll(requiredPermissions)
 

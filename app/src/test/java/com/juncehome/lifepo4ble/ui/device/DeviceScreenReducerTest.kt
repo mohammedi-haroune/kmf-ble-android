@@ -1,11 +1,13 @@
 package com.juncehome.lifepo4ble.ui.device
 
+import com.juncehome.lifepo4ble.ble.ScannedDevice
 import com.juncehome.lifepo4ble.collection.CollectionCadence
 import com.juncehome.lifepo4ble.collection.CollectionPhase
 import com.juncehome.lifepo4ble.collection.CollectionState
 import com.juncehome.lifepo4ble.collection.CollectionVisibility
 import com.juncehome.lifepo4ble.protocol.PacketDirection
 import com.juncehome.lifepo4ble.protocol.PacketFormatter
+import com.juncehome.lifepo4ble.remote.SharingStatus
 import com.juncehome.lifepo4ble.ui.BleUiState
 import com.juncehome.lifepo4ble.ui.ConnectionState
 import com.juncehome.lifepo4ble.ui.firstrun.FirstRunNotice
@@ -239,5 +241,175 @@ class DeviceScreenReducerTest {
     fun meterNameFallsBackToDefault() {
         assertEquals(DeviceScreenReducer.DEFAULT_METER_NAME, reduce(base().copy(savedMeterName = " ")).meter.name)
         assertEquals(address, reduce(base()).meter.address)
+    }
+
+    // ---- Network card: sharing and remote connection ----
+
+    private fun sharingStatus(
+        addresses: List<String>,
+        viewers: Int = 0,
+        running: Boolean = true,
+        error: String? = null,
+    ) = SharingStatus(running = running, port = 8765, addresses = addresses, viewers = viewers, error = error)
+
+    private fun sharing(status: SharingStatus?) = collecting().copy(shareOnNetwork = true, sharingStatus = status)
+
+    private val homeMeter = ScannedDevice("KMF-BT-5A3C", "remote:home:8765", 0, emptyList())
+
+    private fun remote(link: CollectionState?) = base().copy(
+        remoteAddress = "home:8765",
+        selectedDevice = homeMeter,
+        collectionState = link,
+    )
+
+    private fun homeLink(
+        phase: CollectionPhase,
+        error: String? = null,
+        nextAt: Long? = null,
+        unreachable: Boolean = false,
+        homeStopped: Boolean = false,
+    ) = CollectionState(
+        phase = phase,
+        visibility = CollectionVisibility.FOREGROUND,
+        deviceAddress = "remote:home:8765",
+        error = error,
+        nextReconnectAtMs = nextAt,
+        remoteUnreachable = unreachable,
+        homeStopped = homeStopped,
+    )
+
+    @Test
+    fun networkCardSharingShowsPortAddressesAndViewers() {
+        val card = reduce(sharing(sharingStatus(listOf("192.168.1.23", "10.0.0.5"), viewers = 1))).network
+        assertTrue(card.shareOn)
+        assertTrue(card.shareEnabled)
+        assertEquals("Sharing \u00B7 port 8765", card.shareStatus)
+        assertEquals(listOf("192.168.1.23", "10.0.0.5"), card.shareAddresses)
+        assertEquals("1 viewer", card.viewers)
+        assertEquals(DeviceScreenReducer.NOTE_NO_PASSWORD, card.note)
+    }
+
+    @Test
+    fun networkCardCountsViewers() {
+        fun viewers(count: Int) = reduce(sharing(sharingStatus(listOf("192.168.1.23"), viewers = count))).network.viewers
+        assertEquals("0 viewers", viewers(0))
+        assertEquals("1 viewer", viewers(1))
+        assertEquals("12 viewers", viewers(12))
+    }
+
+    @Test
+    fun networkCardAlwaysHasTwoAddressSlots() {
+        fun addresses(vararg values: String) = reduce(sharing(sharingStatus(values.toList()))).network.shareAddresses
+        assertEquals(listOf("192.168.1.23", "--"), addresses("192.168.1.23"))
+        assertEquals(listOf("192.168.1.23", "10.0.0.5"), addresses("192.168.1.23", "10.0.0.5", "172.16.0.9"))
+        assertEquals(listOf("--", "--"), addresses())
+        assertEquals(listOf("--", "--"), reduce(collecting()).network.shareAddresses)
+    }
+
+    @Test
+    fun networkCardShareStatusFollowsTheServer() {
+        val off = reduce(collecting().copy(sharingStatus = sharingStatus(listOf("192.168.1.23"), viewers = 3))).network
+        assertFalse(off.shareOn)
+        assertEquals("Off", off.shareStatus)
+        assertEquals(listOf("--", "--"), off.shareAddresses)
+        assertEquals("0 viewers", off.viewers)
+
+        assertEquals("Waiting for background collection", reduce(sharing(null)).network.shareStatus)
+        val stopped = sharing(sharingStatus(emptyList(), running = false))
+        assertEquals("Waiting for background collection", reduce(stopped).network.shareStatus)
+
+        val failed = reduce(sharing(sharingStatus(emptyList(), running = false, error = "Port 8765 is in use"))).network
+        assertEquals("Port 8765 is in use", failed.shareStatus)
+        assertEquals(listOf("--", "--"), failed.shareAddresses)
+    }
+
+    @Test
+    fun remoteModeDisablesShareAndBluetoothCollection() {
+        val model = reduce(remote(homeLink(CollectionPhase.COLLECTING)).copy(shareOnNetwork = true))
+        assertFalse(model.network.shareEnabled)
+        assertFalse(model.network.shareOn)
+        assertEquals("Off", model.network.shareStatus)
+        assertEquals(listOf("--", "--"), model.network.shareAddresses)
+        assertTrue(model.network.remoteConnected)
+        assertEquals("home:8765", model.network.remoteAddress)
+        assertFalse(model.collection.on)
+        assertFalse(model.collection.switchEnabled)
+        assertEquals(DeviceScreenReducer.REMOTE_OFF_REASON, model.collection.detail)
+        assertNull(model.collection.cadences)
+        assertEquals(DeviceScreenReducer.REMOTE_TEST_BLOCKED, model.test.blockedReason)
+        assertEquals(TestConnectionStatus.Idle, model.test.status)
+        assertFalse(model.test.connectEnabled)
+        assertFalse(model.meter.actionsEnabled)
+    }
+
+    @Test
+    fun bluetoothModeKeepsShareAndMeterActionsEnabled() {
+        val model = reduce(base())
+        assertTrue(model.network.shareEnabled)
+        assertFalse(model.network.remoteConnected)
+        assertEquals("", model.network.remoteAddress)
+        assertTrue(model.meter.actionsEnabled)
+    }
+
+    @Test
+    fun remoteStatusMapsPhases() {
+        fun status(link: CollectionState?) = reduce(remote(link)).network.remoteStatus
+        fun tone(link: CollectionState?) = reduce(remote(link)).network.remoteTone
+
+        assertEquals("Not connected", reduce(base()).network.remoteStatus)
+        assertEquals(DeviceTone.Neutral, reduce(base()).network.remoteTone)
+
+        assertEquals("Connecting\u2026", status(null))
+        assertEquals("Connecting\u2026", status(homeLink(CollectionPhase.STOPPED)))
+        assertEquals("Connecting\u2026", status(homeLink(CollectionPhase.CONNECTING)))
+        assertEquals("Connected \u00B7 KMF-BT-5A3C", status(homeLink(CollectionPhase.COLLECTING)))
+        assertEquals("Connected \u00B7 KMF-BT-5A3C", status(homeLink(CollectionPhase.BOOTSTRAPPING)))
+        assertEquals(DeviceTone.Live, tone(homeLink(CollectionPhase.COLLECTING)))
+
+        val offline = homeLink(CollectionPhase.ERROR, error = "failed to connect", nextAt = nowMs + 4_200L, unreachable = true)
+        assertEquals("Phone offline \u00B7 retry in 5 s", status(offline))
+        assertEquals(DeviceTone.Warning, tone(offline))
+
+        val homeRetry = homeLink(CollectionPhase.ERROR, error = "GATT 133", nextAt = nowMs + 5_000L)
+        assertEquals("Home phone reconnecting to meter", status(homeRetry))
+        assertEquals(DeviceTone.Warning, tone(homeRetry))
+
+        val homeOff = homeLink(CollectionPhase.ERROR, error = "Collection is off on the home phone", homeStopped = true)
+        assertEquals("Collection is off on the home phone", status(homeOff))
+        assertEquals(DeviceTone.Warning, tone(homeOff))
+
+        val sharingOff = homeLink(CollectionPhase.ERROR, error = "Sharing is off on the home phone", homeStopped = true)
+        assertEquals("Sharing is off on the home phone", status(sharingOff))
+        assertEquals(DeviceTone.Warning, tone(sharingOff))
+
+        assertEquals("Home phone: meter out of range", status(homeLink(CollectionPhase.WAITING_FOR_DEVICE)))
+        assertEquals("Home phone: Bluetooth off", status(homeLink(CollectionPhase.BLUETOOTH_OFF)))
+        assertEquals(DeviceTone.Warning, tone(homeLink(CollectionPhase.BLUETOOTH_OFF)))
+
+        val homeError = homeLink(CollectionPhase.ERROR, error = "boom")
+        assertEquals("Home phone error \u00B7 boom", status(homeError))
+        assertEquals(DeviceTone.Error, tone(homeError))
+    }
+
+    @Test
+    fun pausedHomeIsDetectedByTheFlagNotByTheErrorText() {
+        fun status(link: CollectionState?) = reduce(remote(link)).network.remoteStatus
+
+        val lookAlike = homeLink(CollectionPhase.ERROR, error = "Sharing is off on the home phone")
+
+        assertEquals("Home phone error \u00B7 Sharing is off on the home phone", status(lookAlike))
+    }
+
+    @Test
+    fun remoteStatusFallsBackToDefaultMeterName() {
+        val state = remote(homeLink(CollectionPhase.COLLECTING)).copy(selectedDevice = null)
+        assertEquals("Connected \u00B7 ${DeviceScreenReducer.DEFAULT_METER_NAME}", reduce(state).network.remoteStatus)
+    }
+
+    @Test
+    fun remoteErrorIsShown() {
+        val model = reduce(base().copy(remoteAddressError = "Enter a host name or IP, optionally with :port"))
+        assertEquals("Enter a host name or IP, optionally with :port", model.network.remoteError)
+        assertNull(reduce(base()).network.remoteError)
     }
 }

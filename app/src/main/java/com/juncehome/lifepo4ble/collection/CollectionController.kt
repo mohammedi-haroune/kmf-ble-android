@@ -50,6 +50,13 @@ data class CollectionState(
     val reconnectAttempt: Int = 0,
     /** When the link first dropped in the current failure streak; cleared once collecting again. */
     val linkDroppedAtMs: Long? = null,
+    /** True while a retry is pending after the carried phone could not reach the home phone's live feed (false while that retry is connecting). */
+    val remoteUnreachable: Boolean = false,
+    /**
+     * True while the carried phone shows the home phone as paused: it reported [CollectionPhase.STOPPED] (collection
+     * or sharing turned off on purpose). [phase] is ERROR with no retry time and [error] says what was turned off.
+     */
+    val homeStopped: Boolean = false,
 )
 
 interface CollectionController {

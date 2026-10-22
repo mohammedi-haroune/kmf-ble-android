@@ -11,6 +11,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.room.Room
 import com.juncehome.lifepo4ble.ble.AndroidBleScanner
 import com.juncehome.lifepo4ble.ble.AndroidBleSession
+import com.juncehome.lifepo4ble.ble.BleEvent
 import com.juncehome.lifepo4ble.ble.BleRepository
 import com.juncehome.lifepo4ble.collection.AndroidCompanionAssociationGateway
 import com.juncehome.lifepo4ble.collection.CompanionAssociationGateway
@@ -28,9 +29,15 @@ import com.juncehome.lifepo4ble.data.KmfHistoryStore
 import com.juncehome.lifepo4ble.data.KmfTrendsRepository
 import com.juncehome.lifepo4ble.ui.trends.TrendsViewModel
 import com.juncehome.lifepo4ble.platform.BlePermissionPolicy
+import com.juncehome.lifepo4ble.remote.RemoteMeterLink
+import com.juncehome.lifepo4ble.remote.RemoteMeterLinkContract
+import com.juncehome.lifepo4ble.remote.SharingStatusRelay
 import com.juncehome.lifepo4ble.ui.BleViewModel
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharedFlow
 import java.io.File
 
 private val Context.deviceDataStore by preferencesDataStore(name = "device")
@@ -45,8 +52,19 @@ class AppGraph(
     /** Process-wide view of the service-owned controller state for the UI. */
     val collectionStatusRelay: CollectionStatusRelay by lazy { CollectionStatusRelay() }
 
+    /** Process-wide view of the service-owned live feed server for the UI. */
+    val sharingStatusRelay: SharingStatusRelay by lazy { SharingStatusRelay() }
+
+    /** The carried phone's client of a home phone's live feed; the app starts it only while it is visible. */
+    val remoteMeterLink: RemoteMeterLinkContract by lazy {
+        RemoteMeterLink(scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate))
+    }
+
     val collectionConfiguration: Flow<CollectionConfiguration?>
         get() = deviceStore.collectionConfiguration
+
+    val shareOnNetwork: Flow<Boolean>
+        get() = deviceStore.shareOnNetwork
 
     val autonomousCollectionDisabler: AutonomousCollectionDisabler by lazy {
         AutonomousCollectionDisabler(deviceStore, companionAssociationGateway)
@@ -100,6 +118,8 @@ class AppGraph(
         BleRepository(scanner, session)
     }
 
+    val bleEvents: SharedFlow<BleEvent> get() = repository.events
+
     val historyStore: KmfHistoryStore get() = historyRepository
 
     fun createCollectionController(scope: CoroutineScope): CollectionController = CollectionControllerImpl(
@@ -121,6 +141,8 @@ class AppGraph(
                     collectionServiceCommander = AndroidCollectionServiceCommander(application),
                     autonomousCollectionDisabler = autonomousCollectionDisabler,
                     collectionStatus = collectionStatusRelay.state,
+                    remoteLink = remoteMeterLink,
+                    sharingStatus = sharingStatusRelay.state,
                 ) as T
             }
             error("Unknown ViewModel class ${modelClass.name}")
